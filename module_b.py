@@ -6,6 +6,7 @@ python3 module_b.py --target 14 --sim
 """
 
 import argparse
+import heapq
 import json
 import math
 import queue
@@ -17,7 +18,120 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from mvch.navigation import Field, clamp, compose, distance, inverse, load_config, wrap
+
+# Все параметры модуля Б находятся здесь. Перед реальным полем меняются в одном месте.
+ROWS = 6
+COLS = 6
+MARKER_SPACING = 1.0
+BLOCKED_MARKERS = set()
+
+ROBOT_NAMESPACE = "RMC2"
+MARKER_PREFIX = "aruco_"
+ROBOT_HALF_LENGTH = 0.40
+ROBOT_HALF_WIDTH = 0.39
+SAFETY_MARGIN = 0.08
+ROUTE_CLEARANCE = 0.50
+
+MAX_LINEAR = 0.25
+MAX_ANGULAR = 0.45
+LINEAR_ACCEL = 0.35
+ANGULAR_ACCEL = 0.80
+POSITION_TOLERANCE = 0.025
+YAW_TOLERANCE = 0.045
+MOVE_YAW_TOLERANCE = 0.14
+SENSOR_TIMEOUT = 1.5
+MARKER_TIMEOUT = 0.8
+WAYPOINT_TIMEOUT = 50.0
+MISSION_TIMEOUT = 330.0
+
+
+def wrap(angle):
+    return math.atan2(math.sin(angle), math.cos(angle))
+
+
+def clamp(value, low, high):
+    return max(low, min(high, value))
+
+
+def compose(a, b):
+    """Переносит позу b из системы a в её родительскую систему."""
+    x, y, yaw = a
+    c, s = math.cos(yaw), math.sin(yaw)
+    return x + c*b[0] - s*b[1], y + s*b[0] + c*b[1], wrap(yaw+b[2])
+
+
+def inverse(pose):
+    x, y, yaw = pose
+    c, s = math.cos(yaw), math.sin(yaw)
+    return -c*x-s*y, s*x-c*y, -yaw
+
+
+def distance(a, b):
+    return math.hypot(a[0]-b[0], a[1]-b[1])
+
+
+def segment_distance(point, a, b):
+    dx, dy = b[0]-a[0], b[1]-a[1]
+    length2 = dx*dx+dy*dy
+    if length2 == 0:
+        return distance(point, a)
+    t = clamp(((point[0]-a[0])*dx+(point[1]-a[1])*dy)/length2, 0, 1)
+    return distance(point, (a[0]+t*dx, a[1]+t*dy))
+
+
+class Field:
+    """Регулярная сетка ArUco и кратчайший путь по ней."""
+
+    def __init__(self):
+        self.poses = {}
+        self.graph = {}
+        for row in range(ROWS):
+            for col in range(COLS):
+                marker = row*COLS+col
+                self.poses[marker] = (-row*MARKER_SPACING, col*MARKER_SPACING, 0.0)
+                self.graph[marker] = [
+                    r*COLS+c for r, c in
+                    ((row+1, col), (row, col+1), (row-1, col), (row, col-1))
+                    if 0 <= r < ROWS and 0 <= c < COLS
+                ]
+
+    def nearest(self, x, y):
+        return min(self.poses, key=lambda marker: distance((x, y), self.poses[marker]))
+
+    def route(self, start, goal, obstacle_points=(), forbidden_edges=()):
+        """Дейкстра: кратчайший по длине свободный путь."""
+        if start not in self.poses or goal not in self.poses:
+            raise ValueError("ID старта или цели отсутствует в графе")
+        if start in BLOCKED_MARKERS or goal in BLOCKED_MARKERS:
+            raise ValueError("Старт или цель заблокированы")
+
+        forbidden = {frozenset(edge) for edge in forbidden_edges}
+        costs = {start: 0.0}
+        parents = {start: None}
+        queue_path = [(0.0, start)]
+        while queue_path:
+            cost, current = heapq.heappop(queue_path)
+            if cost > costs[current]:
+                continue
+            if current == goal:
+                path = []
+                while current is not None:
+                    path.append(current)
+                    current = parents[current]
+                return path[::-1]
+            for neighbor in self.graph[current]:
+                edge = frozenset((current, neighbor))
+                if neighbor in BLOCKED_MARKERS or edge in forbidden:
+                    continue
+                a, b = self.poses[current], self.poses[neighbor]
+                if any(segment_distance(p, a, b) < ROUTE_CLEARANCE for p in obstacle_points):
+                    continue
+                new_cost = cost+distance(a, b)
+                if new_cost < costs.get(neighbor, math.inf):
+                    costs[neighbor] = new_cost
+                    parents[neighbor] = current
+                    heapq.heappush(queue_path, (new_cost, neighbor))
+        raise ValueError(f"Нет безопасного маршрута {start} -> {goal}")
 
 
 def arguments():
@@ -25,7 +139,6 @@ def arguments():
     target = parser.add_mutually_exclusive_group(required=True)
     target.add_argument("--target", type=int, help="ID целевой метки")
     target.add_argument("--xy", nargs=2, type=float, help="Координаты цели на карте, метры")
-    parser.add_argument("--config", default=str(Path(__file__).parent / "config/module_b.json"))
     parser.add_argument("--sim", action="store_true", help="Часы Webots /clock")
     parser.add_argument("--target-yaw", type=float, help="Ориентация на цели в системе поля, рад")
     parser.add_argument("--auto", action="store_true", help="Только тренировка: без команд эксперта")
@@ -46,10 +159,9 @@ def arguments():
 
 def main():
     args = arguments()
-    config = load_config(args.config)
-    field = Field(config["field"])
+    field = Field()
     target = args.target if args.target is not None else field.nearest(*args.xy)
-    if target not in field.poses or target in field.blocked:
+    if target not in field.poses or target in BLOCKED_MARKERS:
         raise SystemExit("Целевая метка отсутствует в графе или заблокирована")
     if args.dry_run:
         print("ROUTE", field.route(args.start, target), "TARGET", field.poses[target])
@@ -78,12 +190,21 @@ def main():
         def __init__(self):
             super().__init__("mvch_module_b")
             self.set_parameters([rclpy.parameter.Parameter("use_sim_time", value=args.sim)])
-            self.cfg, self.robot = config["control"], config["robot"]
-            for value in (*self.cfg.values(), *(self.robot[k] for k in
-                          ("clearance", "half_length", "half_width", "safety_margin"))):
-                if not isinstance(value, (float, int)) or not math.isfinite(value) or value <= 0:
-                    raise ValueError("Размеры, скорости и таймауты должны быть положительными")
-            ns = self.robot["namespace"].strip("/")
+            self.cfg = {
+                "max_linear": MAX_LINEAR, "max_angular": MAX_ANGULAR,
+                "linear_accel": LINEAR_ACCEL, "angular_accel": ANGULAR_ACCEL,
+                "position_tolerance": POSITION_TOLERANCE,
+                "yaw_tolerance": YAW_TOLERANCE,
+                "move_yaw_tolerance": MOVE_YAW_TOLERANCE,
+                "sensor_timeout": SENSOR_TIMEOUT, "marker_timeout": MARKER_TIMEOUT,
+                "waypoint_timeout": WAYPOINT_TIMEOUT, "mission_timeout": MISSION_TIMEOUT,
+            }
+            self.robot = {
+                "namespace": ROBOT_NAMESPACE, "marker_prefix": MARKER_PREFIX,
+                "clearance": ROUTE_CLEARANCE, "half_length": ROBOT_HALF_LENGTH,
+                "half_width": ROBOT_HALF_WIDTH, "safety_margin": SAFETY_MARGIN,
+            }
+            ns = ROBOT_NAMESPACE.strip("/")
             self.base, self.odom_frame = f"{ns}/base_link", f"{ns}/odom"
             self.buffer = Buffer()
             self.listener = TransformListener(self.buffer, self)
@@ -100,6 +221,8 @@ def main():
             self.odom_wall = self.scan_wall = 0.0
             self.scan = None
             self.points, self.body_points = [], []
+            self.lidar_tf_wall = 0.0
+            self.lidar_tf_error = "TF лидара ещё не получен"
             self.marker = None
             self.marker_wall = self.marker_stamp = 0.0
             self.marker_distance = math.inf
@@ -124,7 +247,7 @@ def main():
             self.log_file = self.log_path.open("a", encoding="utf-8", buffering=1)
             # Таймер на монотонных часах: остановка сработает даже при паузе /clock.
             self.timer = self.create_timer(0.05, self.tick, clock=Clock(clock_type=ClockType.STEADY_TIME))
-            self.log("READY", target=target, config=args.config, sim=args.sim,
+            self.log("READY", target=target, config="constants in module_b.py", sim=args.sim,
                      instructions="Enter/go: старт; return: построить возврат; stop/resume; quit")
 
         def now(self):
@@ -152,7 +275,7 @@ def main():
             self.scan, self.scan_wall = msg, time.monotonic()
 
         def on_marker(self, msg):
-            match = re.fullmatch(re.escape(self.robot["marker_prefix"])+r"(\d+)", msg.data.strip())
+            match = re.fullmatch(re.escape(MARKER_PREFIX)+r"(\d+)", msg.data.strip())
             if not match and msg.data.strip().isdigit():
                 marker = int(msg.data.strip())
             elif match:
@@ -172,7 +295,7 @@ def main():
         def localize(self):
             if self.odom is None or self.marker is None:
                 return
-            frame = self.robot["marker_prefix"]+str(self.marker)
+            frame = MARKER_PREFIX+str(self.marker)
             try:
                 transform = self.buffer.lookup_transform(self.odom_frame, frame, Time())
                 stamp = transform.header.stamp.sec+transform.header.stamp.nanosec/1e9
@@ -199,9 +322,11 @@ def main():
             try:
                 # В этом симуляторе laser_merged повёрнут на 120 градусов!
                 mount = tf_pose(self.buffer.lookup_transform(self.base, scan.header.frame_id, Time()))
-                at_scan = tf_pose(self.buffer.lookup_transform(
-                    self.odom_frame, self.base, Time.from_msg(scan.header.stamp)))
-            except TransformException:
+                # Последний TF достаточно свежий: scan проверяется отдельно по wall-clock.
+                # Запрос строго по stamp иногда попадает между двумя odom TF и кратко падает.
+                at_scan = tf_pose(self.buffer.lookup_transform(self.odom_frame, self.base, Time()))
+            except TransformException as error:
+                self.lidar_tf_error = str(error)
                 return False
             scan_in_map = compose(compose(self.map_from_odom, at_scan), mount)
             body_from_map = inverse(self.pose)
@@ -217,13 +342,16 @@ def main():
                 points[(round(p[0]/0.04), round(p[1]/0.04))] = p
             self.points = list(points.values())
             self.body_points = [compose(body_from_map, (*p, 0)) for p in self.points]
+            self.lidar_tf_wall = time.monotonic()
+            self.lidar_tf_error = ""
             return True
 
         def plan(self):
             self.stop()
             try:
-                self.route = field.route(self.current, self.goal, self.points,
-                                         self.robot["clearance"], self.forbidden)
+                self.route = field.route(
+                    self.current, self.goal, self.points, self.forbidden
+                )
             except ValueError as error:
                 self.abort(str(error))
                 return
@@ -260,8 +388,9 @@ def main():
             elif self.state == "WAIT_GO" and command in ("", "go") and not self.paused:
                 # Новая преграда за время паузы: сначала показать новый маршрут.
                 try:
-                    updated = field.route(self.current, self.goal, self.points,
-                                          self.robot["clearance"], self.forbidden)
+                    updated = field.route(
+                        self.current, self.goal, self.points, self.forbidden
+                    )
                 except ValueError as error:
                     self.abort(str(error))
                     return
@@ -330,8 +459,9 @@ def main():
                 if self.state == "BACKTRACK":
                     self.log("BACKTRACK_DONE", marker=marker)
                     try:
-                        self.route = field.route(self.current, self.goal, self.points,
-                                                 self.robot["clearance"], self.forbidden)
+                        self.route = field.route(
+                            self.current, self.goal, self.points, self.forbidden
+                        )
                     except ValueError as error:
                         self.abort(str(error))
                         return
@@ -391,17 +521,29 @@ def main():
             self.localize()
             if self.map_from_odom is not None and self.odom is not None:
                 self.pose = compose(self.map_from_odom, self.odom)
-            healthy = (self.pose is not None and self.scan is not None
-                       and wall-self.odom_wall < self.cfg["sensor_timeout"]
-                       and wall-self.scan_wall < self.cfg["sensor_timeout"]
-                       and wall-self.clock_wall < self.cfg["sensor_timeout"])
-            if healthy:
-                healthy = self.scan_points()
+            reasons = []
+            if self.pose is None:
+                reasons.append("нет локализации")
+            if self.scan is None:
+                reasons.append("нет scan")
+            if wall-self.odom_wall >= SENSOR_TIMEOUT:
+                reasons.append(f"odometry старше {wall-self.odom_wall:.2f}с")
+            if wall-self.scan_wall >= SENSOR_TIMEOUT:
+                reasons.append(f"scan старше {wall-self.scan_wall:.2f}с")
+            if wall-self.clock_wall >= SENSOR_TIMEOUT:
+                reasons.append(f"clock старше {wall-self.clock_wall:.2f}с")
+            healthy = not reasons
+            if healthy and not self.scan_points():
+                # Один краткий промах TF не должен ставить миссию на вечную паузу.
+                if wall-self.lidar_tf_wall >= SENSOR_TIMEOUT:
+                    reasons.append("TF лидара: "+self.lidar_tf_error)
+                    healthy = False
             if not healthy:
                 self.stop()
                 if self.state != "WAIT_SENSORS" and not self.paused:
                     self.paused = True
-                    self.log("SENSOR_STOP", message="Нет свежих odometry/scan/TF/clock; после восстановления: resume")
+                    self.log("SENSOR_STOP", reason="; ".join(reasons),
+                             message="После восстановления введите resume")
             while not self.commands.empty():
                 command = self.commands.get_nowait()
                 if healthy or command.strip() in ("stop", "quit", "q", "s"):
