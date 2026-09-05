@@ -359,6 +359,10 @@ def main():
                 return
             self.index = 1
             self.state = "WAIT_GO"
+            direction = "К ЦЕЛИ" if self.leg == "outbound" else "НА СТАРТ"
+            print(f"\nМАРШРУТ {direction}: {' -> '.join(map(str, self.route))}", flush=True)
+            print("Ровер пока стоит. Эксперт проверяет маршрут; Enter/go разрешает движение.\n",
+                  flush=True)
             self.log("ROUTE", markers=self.route, goal=self.goal)
             self.log("WAIT_GO", message="Эксперт фиксирует маршрут. Enter/go разрешает движение.")
 

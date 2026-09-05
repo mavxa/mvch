@@ -1,8 +1,9 @@
 # mvch — подготовка к ЧВТ-2026
 
-Репозиторий для самостоятельного изучения и тренировок. Сейчас здесь модуль **Б**:
-РМК-2 едет по графу ArUco к цели и обратно, обнаруживает препятствия лидаром.
-Модули В/Г/Д пока не реализованы. Ветка этого модуля — `module2`.
+Репозиторий для самостоятельного изучения и тренировок по модулям ЧВТ.
+
+- `module2/module_b.py` — модуль **Б**, навигация РМК-2 по ArUco.
+- `module3/` — модуль **В**, датасет и распознавание инструментов (ветка `module3`).
 
 ## Запуск в Ubuntu VM
 
@@ -24,7 +25,7 @@ cd ~/mvch
 git pull --ff-only
 source /opt/ros/jazzy/setup.bash
 source ~/ros2_ws/install/setup.bash
-python3 module_b.py --target 14 --sim
+python3 module2/module_b.py --target 14 --sim
 ```
 
 1. Робот должен стоять **центром над известной меткой**. Начальная ориентация любая:
@@ -46,13 +47,13 @@ Ctrl+C немедленно инициирует остановку и заве�
 Автоматическая тренировка без подтверждений (только симулятор):
 
 ```bash
-python3 module_b.py --target 14 --sim --auto --return-delay 10
+python3 module2/module_b.py --target 14 --sim --auto --return-delay 10
 ```
 
 Цель координатами и конечная ориентация, в системе **поля**:
 
 ```bash
-python3 module_b.py --xy -2 2 --target-yaw 1.57 --sim
+python3 module2/module_b.py --xy -2 2 --target-yaw 1.57 --sim
 ```
 
 На физическом роботе `--sim` не указывать. Перед переносом обязательно проверить
@@ -63,7 +64,7 @@ python3 module_b.py --xy -2 2 --target-yaw 1.57 --sim
 
 ## Как устроен код
 
-Весь модуль находится в одном файле `module_b.py`: сверху параметры поля и
+Весь модуль находится в одном файле `module2/module_b.py`: сверху параметры поля и
 скоростей, затем геометрия и Дейкстра, ниже ROS-узел, безопасность и логи.
 
 Читайте в таком порядке: `Field.route` → `localize` → `scan_points` → `plan` → `drive` → `tick`.
@@ -88,7 +89,7 @@ python3 module_b.py --xy -2 2 --target-yaw 1.57 --sim
 ## Проверки и логи
 
 ```bash
-python3 module_b.py --target 14 --dry-run
+python3 module2/module_b.py --target 14 --dry-run
 ```
 
 `reports/module_b_*.jsonl` содержат маршрут, движение, ошибки, препятствия,
