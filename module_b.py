@@ -27,10 +27,12 @@ BLOCKED_MARKERS = set()
 
 ROBOT_NAMESPACE = "RMC2"
 MARKER_PREFIX = "aruco_"
-ROBOT_HALF_LENGTH = 0.40
-ROBOT_HALF_WIDTH = 0.39
-SAFETY_MARGIN = 0.08
-ROUTE_CLEARANCE = 0.50
+# RMC2.proto: край корпуса находится примерно в 0.373 м от base_link.
+# Четыре сантиметра запаса оставляют проходимым узкий коридор у marker 33.
+ROBOT_HALF_LENGTH = 0.375
+ROBOT_HALF_WIDTH = 0.375
+SAFETY_MARGIN = 0.04
+ROUTE_CLEARANCE = 0.44
 
 MAX_LINEAR = 0.25
 MAX_ANGULAR = 0.45
@@ -477,7 +479,9 @@ def main():
                 self.stop()  # Без свежей метки достижение НЕ засчитываем.
                 return
             error = wrap(math.atan2(dy, dx)-self.pose[2])
-            reverse = self.state == "BACKTRACK" or (d < 0.12 and abs(error) > math.pi/2)
+            # Если следующая метка сзади, едем к ней задним ходом. Это не даёт
+            # роботу разворачиваться корпусом вплотную к стеллажам у marker 33.
+            reverse = self.state == "BACKTRACK" or abs(error) > math.pi/2
             if reverse:
                 error = wrap(error-math.pi)
             v = min(self.cfg["max_linear"], 0.8*d)
