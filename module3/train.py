@@ -6,6 +6,7 @@ from pathlib import Path
 
 
 HERE = Path(__file__).resolve().parent
+TRAINING = HERE / "training"
 
 
 def local_path(value):
@@ -31,9 +32,15 @@ def select_device(requested, torch):
 
 def arguments():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data", default="dataset/data.yaml", help="data.yaml из Roboflow")
+    parser.add_argument("--data", default="training/data.yaml", help="data.yaml из Roboflow")
     parser.add_argument("--model", default="yolo11n.pt", help="Стартовые веса Ultralytics")
-    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument(
+        "--patience",
+        type=int,
+        default=7,
+        help="Остановиться после N эпох без улучшения validation metrics",
+    )
     parser.add_argument("--imgsz", type=int, default=512)
     parser.add_argument("--batch", type=int, default=8)
     parser.add_argument("--workers", type=int, default=4)
@@ -68,11 +75,12 @@ def main():
     result = model.train(
         data=str(data),
         epochs=args.epochs,
+        patience=args.patience,
         imgsz=args.imgsz,
         batch=args.batch,
         workers=args.workers,
         device=device,
-        project=str(HERE / "runs"),
+        project=str(TRAINING / "runs"),
         name=args.name,
         seed=42,
         deterministic=True,

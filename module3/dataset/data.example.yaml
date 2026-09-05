@@ -5,5 +5,5 @@ test: test/images
 
 names:
   0: hammer
-  1: wrench
-  2: pliers
+  1: pliers
+  2: wrench

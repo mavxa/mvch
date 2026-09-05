@@ -8,20 +8,20 @@
 
 ```text
 hammer
-wrench
 pliers
+wrench
 ```
 
-Рамкой выделяйте **всю белую карточку/коробку с изображением инструмента**, а класс
-задавайте по картинке. Это даст модели центр коробки, нужный затем для захвата.
+Рамкой выделяйте изображение инструмента на карточке, а класс задавайте по
+картинке. Используйте одинаковый стиль разметки в симуляторе и на реальном поле.
 Размечайте каждый видимый экземпляр: в штатной сцене две карточки `pliers`, одна
 `hammer` и одна `wrench`. Классы `box` и `background` не создавайте.
 
 В Roboflow создайте `Object Detection` project, загрузите `dataset/raw/*.jpg`,
 разметьте кадры, сделайте split 70/20/10 и экспортируйте в формате YOLO11.
-Распакуйте экспорт так, чтобы появился `module3/dataset/data.yaml` и каталоги
-`train`, `valid`, `test`. Проверьте порядок классов в экспортированном `data.yaml`:
-он должен совпадать с `dataset/classes.txt`.
+Распакуйте экспорт в `module3/training`: там должны появиться `data.yaml` и
+каталоги `train`, `valid`, `test`. Не переставляйте номера классов в `data.yaml`:
+они назначаются Roboflow и должны совпадать с ID внутри label-файлов.
 
 В `dataset/raw` уже лежат 40 кадров из штатной сцены. Расположение объектов
 менять не требуется: кадры сняты под разными углами камеры, а дополнительные
@@ -53,6 +53,16 @@ ROCm лучше сначала установить подходящую сбо�
 
 ## Обучение
 
+Если часть объектов была размечена полигонами, один раз приведите экспорт к
+обычным bounding boxes:
+
+```bash
+python prepare_dataset.py
+```
+
+Для теста используются максимум 30 эпох и early stopping после 7 эпох без
+улучшения validation metrics.
+
 Автовыбор: NVIDIA CUDA / AMD ROCm, а если GPU недоступен — CPU:
 
 ```bash
@@ -71,12 +81,12 @@ python train.py --device cpu --batch 4 --workers 2
 python train.py --device cuda
 ```
 
-Результат: `runs/tools_yolo11n/weights/best.pt`.
+Результат: `training/runs/tools_yolo11n/weights/best.pt`.
 
 ## Проверка на фотографии
 
 ```bash
-python test_model.py dataset/test/images/example.jpg --device cpu
+python test_model.py training/test/images/example.jpg --device cpu
 ```
 
 С `--show` откроется окно. Независимо от окна размеченная фотография сохраняется

@@ -1,0 +1,18 @@
+train: train/images
+val: valid/images
+test: test/images
+
+names:
+  0: hammer
+  1: pliers
+  2: wrench
+
+# nc: 3
+# names: ['hammer', 'pliers', 'wrench']
+
+# roboflow:
+#   workspace: jons-workspace-8viwr
+#   project: chvt-2026
+#   version: 1
+#   license: CC BY 4.0
+#   url: https://universe.roboflow.com/jons-workspace-8viwr/chvt-2026/dataset/1
