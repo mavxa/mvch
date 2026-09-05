@@ -4,5 +4,6 @@ __pycache__/
 reports/
 .pytest_cache/
 *.pt
+!module3/models/latest.pt
 module3/runs/
 module3/predictions/

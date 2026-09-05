@@ -2,6 +2,7 @@
 """Обучение YOLO11 на размеченном датасете инструментов."""
 
 import argparse
+import shutil
 from pathlib import Path
 
 
@@ -95,7 +96,12 @@ def main():
         flipud=0.5,
     )
     save_dir = Path(result.save_dir)
-    print(f"Лучшие веса: {save_dir / 'weights' / 'best.pt'}")
+    best_weights = save_dir / "weights" / "best.pt"
+    model_copy = HERE / "models" / "latest.pt"
+    model_copy.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(best_weights, model_copy)
+    print(f"Лучшие веса: {best_weights}")
+    print(f"Модель для test_model.py: {model_copy}")
 
 
 if __name__ == "__main__":

@@ -81,7 +81,8 @@ python train.py --device cpu --batch 4 --workers 2
 python train.py --device cuda
 ```
 
-Результат: `training/runs/tools_yolo11n/weights/best.pt`.
+Лучшие веса сохраняются в `training/runs/tools_yolo11n/weights/best.pt` и
+автоматически копируются в `models/latest.pt` для простого запуска проверки.
 
 ## Проверка на фотографии
 

@@ -30,7 +30,7 @@ def select_device(requested, torch):
 def arguments():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", help="Фотография для проверки")
-    parser.add_argument("--weights", default="training/runs/tools_yolo11n/weights/best.pt")
+    parser.add_argument("--weights", default="models/latest.pt")
     parser.add_argument("--output", default="predictions", help="Каталог результата")
     parser.add_argument("--conf", type=float, default=0.35)
     parser.add_argument("--imgsz", type=int, default=512)
