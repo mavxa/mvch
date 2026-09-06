@@ -144,7 +144,7 @@ class Detection:
         return (x1 + x2) / 2.0, (y1 + y2) / 2.0
 
 
-def find_target(result, frame, requested, cv2, np):
+def find_target(result, frame, requested, cv2, np, prefer_center=False):
     found = []
     if result.boxes is None:
         return None
@@ -156,7 +156,16 @@ def find_target(result, frame, requested, cv2, np):
         confidence = float(box.conf.item())
         xyxy = tuple(float(value) for value in box.xyxy[0])
         found.append(Detection(name, confidence, xyxy, card_short_axis(frame, xyxy, cv2, np)))
-    return max(found, key=lambda item: item.confidence, default=None)
+    if not found:
+        return None
+    if prefer_center:
+        image_center = frame.shape[1] / 2.0, frame.shape[0] / 2.0
+        return min(
+            found,
+            key=lambda item: (item.center[0] - image_center[0]) ** 2
+            + (item.center[1] - image_center[1]) ** 2,
+        )
+    return max(found, key=lambda item: item.confidence)
 
 
 def estimate_pose(node, detection, plane_z):
@@ -361,7 +370,7 @@ def wait_for_trigger(args, node, model, requested, cv2, np, event_log):
     raise RuntimeError(f"За {args.timeout:.0f} с класс {requested} не найден")
 
 
-def fresh_detection(node, model, requested, args, cv2, np):
+def fresh_detection(node, model, requested, args, cv2, np, prefer_center=False):
     time.sleep(0.7)
     frame = node.latest_frame()
     if frame is None:
@@ -373,7 +382,7 @@ def fresh_detection(node, model, requested, args, cv2, np):
         device=args.device,
         verbose=False,
     )[0]
-    detection = find_target(result, frame, requested, cv2, np)
+    detection = find_target(result, frame, requested, cv2, np, prefer_center)
     if detection is None:
         raise RuntimeError(f"После установки руки не найден класс {requested}")
     return detection
@@ -507,8 +516,26 @@ def main():
         if args.plan_only:
             print("[PLAN-ONLY] Подход построен, движения не было")
             return
+        close_detection = fresh_detection(
+            node, model, requested, args, cv2, np, prefer_center=True
+        )
+        close_x, close_y, close_yaw = estimate_pose(node, close_detection, args.plane_z)
+        correction = math.hypot(close_x - x, close_y - y)
+        if correction > 0.12:
+            raise RuntimeError(f"Слишком большая поправка координат: {correction:.3f} м")
+        x, y, yaw = close_x, close_y, close_yaw
+        event_log.write(
+            "TARGET_REFINED",
+            confidence=round(close_detection.confidence, 4),
+            correction=round(correction, 4),
+            x=round(x, 4),
+            y=round(y, 4),
+            yaw=round(yaw, 4),
+        )
+        arm.pose(x, y, args.approach_z, yaw, "точный подход над деталью")
         arm.pose(x, y, args.pick_z, yaw, "опустить схват")
         arm.close()
+        save_snapshot(node, event_log, "gripped", cv2)
         arm.pose(x, y, args.approach_z, yaw, "поднять деталь")
         arm.initial("исходное положение с деталью")
         save_snapshot(node, event_log, "with_detail", cv2)
