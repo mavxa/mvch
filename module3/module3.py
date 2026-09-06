@@ -144,7 +144,7 @@ class Detection:
         return (x1 + x2) / 2.0, (y1 + y2) / 2.0
 
 
-def find_target(result, frame, requested, cv2, np, prefer_center=False):
+def find_target(result, frame, requested, cv2, np):
     found = []
     if result.boxes is None:
         return None
@@ -156,16 +156,46 @@ def find_target(result, frame, requested, cv2, np, prefer_center=False):
         confidence = float(box.conf.item())
         xyxy = tuple(float(value) for value in box.xyxy[0])
         found.append(Detection(name, confidence, xyxy, card_short_axis(frame, xyxy, cv2, np)))
-    if not found:
-        return None
-    if prefer_center:
-        image_center = frame.shape[1] / 2.0, frame.shape[0] / 2.0
-        return min(
-            found,
-            key=lambda item: (item.center[0] - image_center[0]) ** 2
-            + (item.center[1] - image_center[1]) ** 2,
-        )
-    return max(found, key=lambda item: item.confidence)
+    return max(found, key=lambda item: item.confidence, default=None)
+
+
+def card_near_center(frame, requested, cv2, np):
+    """На близком кадре находит светлую коробку около центра камеры."""
+    height, width = frame.shape[:2]
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, (0, 0, 115), (180, 110, 255))
+    kernel = np.ones((7, 7), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    candidates = []
+    for contour in contours:
+        rectangle = cv2.minAreaRect(contour)
+        rect_width, rect_height = rectangle[1]
+        rect_area = rect_width * rect_height
+        if rect_area < 2000 or min(rect_width, rect_height) < 20:
+            continue
+        aspect = max(rect_width, rect_height) / min(rect_width, rect_height)
+        if not 1.2 <= aspect <= 4.0:
+            continue
+        center_x, center_y = rectangle[0]
+        distance = math.hypot(center_x - width / 2.0, center_y - height / 2.0)
+        candidates.append((distance, rectangle))
+
+    if not candidates:
+        raise RuntimeError("На близком кадре не найдена коробка")
+    distance, rectangle = min(candidates, key=lambda item: item[0])
+    if distance > min(width, height) * 0.30:
+        raise RuntimeError(f"Коробка слишком далеко от центра кадра: {distance:.0f} px")
+
+    points = cv2.boxPoints(rectangle)
+    edges = [points[(index + 1) % 4] - points[index] for index in range(4)]
+    short_edge = min(edges, key=lambda edge: float(np.linalg.norm(edge)))
+    length = float(np.linalg.norm(short_edge))
+    short_axis = float(short_edge[0] / length), float(short_edge[1] / length)
+    x1, y1 = np.min(points, axis=0)
+    x2, y2 = np.max(points, axis=0)
+    return Detection(requested, 1.0, (float(x1), float(y1), float(x2), float(y2)), short_axis)
 
 
 def estimate_pose(node, detection, plane_z):
@@ -370,7 +400,7 @@ def wait_for_trigger(args, node, model, requested, cv2, np, event_log):
     raise RuntimeError(f"За {args.timeout:.0f} с класс {requested} не найден")
 
 
-def fresh_detection(node, model, requested, args, cv2, np, prefer_center=False):
+def fresh_detection(node, model, requested, args, cv2, np):
     time.sleep(0.7)
     frame = node.latest_frame()
     if frame is None:
@@ -382,7 +412,7 @@ def fresh_detection(node, model, requested, args, cv2, np, prefer_center=False):
         device=args.device,
         verbose=False,
     )[0]
-    detection = find_target(result, frame, requested, cv2, np, prefer_center)
+    detection = find_target(result, frame, requested, cv2, np)
     if detection is None:
         raise RuntimeError(f"После установки руки не найден класс {requested}")
     return detection
@@ -516,9 +546,11 @@ def main():
         if args.plan_only:
             print("[PLAN-ONLY] Подход построен, движения не было")
             return
-        close_detection = fresh_detection(
-            node, model, requested, args, cv2, np, prefer_center=True
-        )
+        time.sleep(0.5)
+        close_frame = node.latest_frame()
+        if close_frame is None:
+            raise RuntimeError("Нет близкого кадра для уточнения")
+        close_detection = card_near_center(close_frame, requested, cv2, np)
         close_x, close_y, close_yaw = estimate_pose(node, close_detection, args.plane_z)
         correction = math.hypot(close_x - x, close_y - y)
         if correction > 0.12:
@@ -526,7 +558,7 @@ def main():
         x, y, yaw = close_x, close_y, close_yaw
         event_log.write(
             "TARGET_REFINED",
-            confidence=round(close_detection.confidence, 4),
+            method="card_near_center",
             correction=round(correction, 4),
             x=round(x, 4),
             y=round(y, 4),
