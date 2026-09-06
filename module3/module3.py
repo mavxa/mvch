@@ -358,16 +358,42 @@ def wait_for_trigger(args, node, model, requested, cv2, np, event_log):
     started = time.monotonic()
     last_detection = None
     last_frame_time = 0.0
+    last_status_time = 0.0
+    frame_count = 0
+    best_classes = {}
+    terminal_trigger = threading.Event()
+    target_visible = threading.Event()
     window = not args.no_window and bool(os.environ.get("DISPLAY"))
     if not args.no_window and not window:
         print("[WARN] DISPLAY не найден, работаю без окна")
 
-    print(f"[READY] Цель: {requested}. После фиксации экспертом нажмите G в окне.")
+    def read_terminal_command():
+        while not terminal_trigger.is_set():
+            try:
+                command = input().strip().lower()
+            except EOFError:
+                return
+            if command not in ("", "g", "go"):
+                print("[WAIT] Команда не распознана. Введите g и нажмите Enter.")
+                continue
+            if not target_visible.is_set():
+                print(f"[WAIT] Класс {requested} пока не найден, команда не принята.")
+                continue
+            terminal_trigger.set()
+
+    if not args.auto_start and sys.stdin.isatty():
+        threading.Thread(target=read_terminal_command, daemon=True).start()
+
+    print(
+        f"[READY] Цель: {requested}. После фиксации нажмите G в окне "
+        "или введите g + Enter в терминале."
+    )
     while time.monotonic() - started < args.timeout:
         frame = node.latest_frame()
         if frame is None:
             time.sleep(0.05)
             continue
+        frame_count += 1
         result = model.predict(
             source=frame,
             conf=args.conf,
@@ -375,8 +401,17 @@ def wait_for_trigger(args, node, model, requested, cv2, np, event_log):
             device=args.device,
             verbose=False,
         )[0]
+        if result.boxes is not None:
+            for box in result.boxes:
+                name = str(result.names[int(box.cls.item())]).lower()
+                confidence = float(box.conf.item())
+                best_classes[name] = max(best_classes.get(name, 0.0), confidence)
         detections = find_targets(result, frame, requested, cv2, np)
         last_detection = choose_target(node, detections, args.plane_z)
+        if last_detection is None:
+            target_visible.clear()
+        else:
+            target_visible.set()
         annotated = result.plot(labels=True, conf=True, line_width=2)
         if last_detection is not None:
             u, v = (int(value) for value in last_detection.center)
@@ -400,6 +435,14 @@ def wait_for_trigger(args, node, model, requested, cv2, np, event_log):
                 center=[round(value, 1) for value in last_detection.center],
             )
             last_frame_time = now
+        elif now - last_status_time > 5.0:
+            event_log.write(
+                "VISION_WAIT",
+                target=requested,
+                frames=frame_count,
+                seen={name: round(value, 3) for name, value in sorted(best_classes.items())},
+            )
+            last_status_time = now
 
         key = -1
         if window:
@@ -407,12 +450,19 @@ def wait_for_trigger(args, node, model, requested, cv2, np, event_log):
             key = cv2.waitKey(1) & 0xFF
         if key == 27:
             raise KeyboardInterrupt
-        if last_detection is not None and (args.auto_start or key in (ord("g"), ord("G"), 13, 32)):
+        if last_detection is not None and (
+            args.auto_start
+            or terminal_trigger.is_set()
+            or key in (ord("g"), ord("G"), 13, 32)
+        ):
             return last_detection
-        if not window and last_detection is not None and not args.auto_start:
-            input("Цель найдена. После фиксации экспертом нажмите Enter: ")
-            return last_detection
-    raise RuntimeError(f"За {args.timeout:.0f} с класс {requested} не найден")
+    if frame_count == 0:
+        raise RuntimeError(f"Нет кадров с топика {args.topic} за {args.timeout:.0f} с")
+    seen = ", ".join(f"{name}={value:.2f}" for name, value in sorted(best_classes.items()))
+    raise RuntimeError(
+        f"За {args.timeout:.0f} с класс {requested} не найден; "
+        f"обработано кадров: {frame_count}; распознано: {seen or 'ничего'}"
+    )
 
 
 def fresh_detection(node, model, requested, args, cv2, np):
