@@ -31,6 +31,9 @@ class EventLog:
         with self.path.open("a", encoding="utf-8") as stream:
             stream.write(line + "\n")
 
+    def image_path(self, suffix):
+        return self.path.with_name(f"{self.path.stem}_{suffix}.jpg")
+
 
 def local_path(value):
     path = Path(value).expanduser()
@@ -376,6 +379,19 @@ def fresh_detection(node, model, requested, args, cv2, np):
     return detection
 
 
+def save_snapshot(node, event_log, suffix, cv2):
+    time.sleep(0.5)
+    frame = node.latest_frame()
+    if frame is None:
+        event_log.write("SNAPSHOT_FAILED", stage=suffix, reason="нет кадра")
+        return
+    path = event_log.image_path(suffix)
+    if cv2.imwrite(str(path), frame):
+        event_log.write("SNAPSHOT", stage=suffix, path=str(path))
+    else:
+        event_log.write("SNAPSHOT_FAILED", stage=suffix, reason="ошибка записи")
+
+
 def main():
     args = arguments()
     requested = target_name(args.target or input("Цель (1 hammer, 2 wrench, 3 pliers): "))
@@ -495,12 +511,14 @@ def main():
         arm.close()
         arm.pose(x, y, args.approach_z, yaw, "поднять деталь")
         arm.initial("исходное положение с деталью")
+        save_snapshot(node, event_log, "with_detail", cv2)
 
         arm.pose(drop_x, drop_y, args.approach_z, yaw, "подход к пустому месту")
         arm.pose(drop_x, drop_y, args.pick_z, yaw, "опустить деталь")
         arm.open()
         arm.pose(drop_x, drop_y, args.approach_z, yaw, "отойти от детали")
         arm.initial("исходное положение без детали")
+        save_snapshot(node, event_log, "finished", cv2)
         event_log.write("DONE", message="Деталь возвращена, манипулятор в исходном положении")
     except KeyboardInterrupt:
         print("\n[STOP] Остановлено оператором")

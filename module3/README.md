@@ -51,6 +51,7 @@ module3/.venv/bin/python module3/module3.py --target hammer --dry-run --no-windo
 
 События распознавания, координаты, построение движений и состояния схвата
 одновременно выводятся в терминал и сохраняются в `module3/logs/*.log`.
+Туда же пишутся контрольные кадры `*_with_detail.jpg` и `*_finished.jpg`.
 
 ## Что размечать
 
