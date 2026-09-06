@@ -9,6 +9,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 
 HERE = Path(__file__).resolve().parent
@@ -233,7 +234,7 @@ class Arm:
     def __init__(
         self,
         moveit,
-        moveit_config,
+        params_file,
         PoseStamped,
         quaternion_from_euler,
         event_log,
@@ -242,7 +243,8 @@ class Arm:
         self.robot = moveit(
             node_name="mvch_module3_moveit",
             name_space="/RMC1/arm95",
-            config_dict=moveit_config,
+            launch_params_filepaths=[params_file],
+            config_dict=None,
         )
         self.arm = self.robot.get_planning_component("arm95_group")
         self.gripper = self.robot.get_planning_component("gripper")
@@ -386,6 +388,7 @@ def main():
         import cv2
         import numpy as np
         import rclpy
+        import yaml
         from ament_index_python.packages import get_package_share_directory
         from cv_bridge import CvBridge
         from geometry_msgs.msg import PoseStamped
@@ -449,14 +452,22 @@ def main():
             .to_dict()
         )
         moveit_config["use_sim_time"] = True
-        arm = Arm(
-            MoveItPy,
-            moveit_config,
-            PoseStamped,
-            quaternion_from_euler,
-            event_log,
-            args.plan_only,
-        )
+        # Wildcard нужен из-за namespace /RMC1/arm95: обычный config_dict
+        # записывает параметры только для имени узла без namespace.
+        with NamedTemporaryFile("w", suffix=".yaml", delete=False) as stream:
+            yaml.safe_dump({"/**": {"ros__parameters": moveit_config}}, stream)
+            params_file = stream.name
+        try:
+            arm = Arm(
+                MoveItPy,
+                params_file,
+                PoseStamped,
+                quaternion_from_euler,
+                event_log,
+                args.plan_only,
+            )
+        finally:
+            Path(params_file).unlink(missing_ok=True)
         arm.open()
         arm.initial("установить исходное положение")
         detection = fresh_detection(node, model, requested, args, cv2, np)
