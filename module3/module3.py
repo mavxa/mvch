@@ -45,7 +45,7 @@ def arguments():
     parser.add_argument("--target", help="1/hammer, 2/wrench или 3/pliers")
     parser.add_argument("--weights", default="models/latest.pt")
     parser.add_argument("--topic", default="/RMC1/arm95/camera_gripper/image_color")
-    parser.add_argument("--conf", type=float, default=0.45)
+    parser.add_argument("--conf", type=float, default=0.20)
     parser.add_argument("--imgsz", type=int, default=512)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--timeout", type=float, default=60.0)
@@ -230,8 +230,20 @@ def build_vision_node(args, imports):
 
 
 class Arm:
-    def __init__(self, moveit, PoseStamped, quaternion_from_euler, event_log, plan_only=False):
-        self.robot = moveit(node_name="mvch_module3_moveit", name_space="/RMC1/arm95")
+    def __init__(
+        self,
+        moveit,
+        moveit_config,
+        PoseStamped,
+        quaternion_from_euler,
+        event_log,
+        plan_only=False,
+    ):
+        self.robot = moveit(
+            node_name="mvch_module3_moveit",
+            name_space="/RMC1/arm95",
+            config_dict=moveit_config,
+        )
         self.arm = self.robot.get_planning_component("arm95_group")
         self.gripper = self.robot.get_planning_component("gripper")
         self.PoseStamped = PoseStamped
@@ -374,9 +386,11 @@ def main():
         import cv2
         import numpy as np
         import rclpy
+        from ament_index_python.packages import get_package_share_directory
         from cv_bridge import CvBridge
         from geometry_msgs.msg import PoseStamped
         from moveit.planning import MoveItPy
+        from moveit_configs_utils import MoveItConfigsBuilder
         from rclpy.duration import Duration
         from rclpy.executors import SingleThreadedExecutor
         from rclpy.node import Node
@@ -423,7 +437,26 @@ def main():
             )
             return
 
-        arm = Arm(MoveItPy, PoseStamped, quaternion_from_euler, event_log, args.plan_only)
+        package_dir = Path(get_package_share_directory("ar_webots_fms_ros2"))
+        moveit_config = (
+            MoveItConfigsBuilder("arm95")
+            .robot_description(file_path=str(package_dir / "resource/urdf/arm95_webots.urdf"))
+            .trajectory_execution(
+                file_path=str(package_dir / "resource/config/moveit_controllers.yaml")
+            )
+            .moveit_cpp(file_path=str(package_dir / "resource/config/moveit_cpp.yaml"))
+            .to_moveit_configs()
+            .to_dict()
+        )
+        moveit_config["use_sim_time"] = True
+        arm = Arm(
+            MoveItPy,
+            moveit_config,
+            PoseStamped,
+            quaternion_from_euler,
+            event_log,
+            args.plan_only,
+        )
         arm.open()
         arm.initial("установить исходное положение")
         detection = fresh_detection(node, model, requested, args, cv2, np)
