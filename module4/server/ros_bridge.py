@@ -19,6 +19,7 @@ from builtin_interfaces.msg import Duration
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from rclpy.action import ActionClient
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import BatteryState, LaserScan
@@ -488,13 +489,15 @@ def main():
     threading.Thread(target=read_commands, args=(node,), daemon=True).start()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
-        for robot in ROBOTS:
-            node.publish_twist(robot)
+        if rclpy.ok():
+            for robot in ROBOTS:
+                node.publish_twist(robot)
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":
