@@ -381,13 +381,16 @@ def wait_for_trigger(args, node, model, requested, cv2, np, event_log):
                 continue
             terminal_trigger.set()
 
-    if not args.auto_start and sys.stdin.isatty():
+    if not args.auto_start and not args.dry_run and sys.stdin.isatty():
         threading.Thread(target=read_terminal_command, daemon=True).start()
 
-    print(
-        f"[READY] Цель: {requested}. После фиксации нажмите G в окне "
-        "или введите g + Enter в терминале."
-    )
+    if args.dry_run:
+        print(f"[READY] Dry-run: жду первое распознавание класса {requested}.")
+    else:
+        print(
+            f"[READY] Цель: {requested}. После фиксации нажмите G в окне "
+            "или введите g + Enter в терминале."
+        )
     while time.monotonic() - started < args.timeout:
         frame = node.latest_frame()
         if frame is None:
@@ -427,14 +430,15 @@ def wait_for_trigger(args, node, model, requested, cv2, np, event_log):
                 )
 
         now = time.monotonic()
-        if last_detection is not None and now - last_frame_time > 0.8:
-            event_log.write(
-                "DETECTION",
-                target=last_detection.name,
-                confidence=round(last_detection.confidence, 4),
-                center=[round(value, 1) for value in last_detection.center],
-            )
-            last_frame_time = now
+        if last_detection is not None:
+            if now - last_frame_time > 0.8:
+                event_log.write(
+                    "DETECTION",
+                    target=last_detection.name,
+                    confidence=round(last_detection.confidence, 4),
+                    center=[round(value, 1) for value in last_detection.center],
+                )
+                last_frame_time = now
         elif now - last_status_time > 5.0:
             event_log.write(
                 "VISION_WAIT",
@@ -451,7 +455,8 @@ def wait_for_trigger(args, node, model, requested, cv2, np, event_log):
         if key == 27:
             raise KeyboardInterrupt
         if last_detection is not None and (
-            args.auto_start
+            args.dry_run
+            or args.auto_start
             or terminal_trigger.is_set()
             or key in (ord("g"), ord("G"), 13, 32)
         ):

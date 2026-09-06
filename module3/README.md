@@ -60,6 +60,9 @@ module3/.venv/bin/python module3/module3.py --target 1
 module3/.venv/bin/python module3/module3.py --target hammer --dry-run
 ```
 
+В режиме `--dry-run` подтверждать запуск клавишей не нужно: скрипт завершится
+после первой валидной детекции и вывода рассчитанных координат.
+
 Для проверки через SSH без окна:
 
 ```bash
