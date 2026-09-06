@@ -289,14 +289,16 @@ export default function App() {
       if (!pressed.delete(key)) return
       movement()
     }
+    const blur = () => { pressed.clear(); movement() }
     const repeat = setInterval(() => { if (pressed.size) movement() }, 120)
     window.addEventListener('keydown', down)
     window.addEventListener('keyup', up)
-    window.addEventListener('blur', () => { pressed.clear(); movement() })
+    window.addEventListener('blur', blur)
     return () => {
       clearInterval(repeat)
       window.removeEventListener('keydown', down)
       window.removeEventListener('keyup', up)
+      window.removeEventListener('blur', blur)
     }
   }, [selected, send])
 
@@ -391,4 +393,3 @@ export default function App() {
     </main>
   )
 }
-

@@ -63,6 +63,14 @@ def quaternion_from_yaw(yaw):
     return 0.0, 0.0, math.sin(yaw / 2.0), math.cos(yaw / 2.0)
 
 
+def wrap_angle(angle):
+    return math.atan2(math.sin(angle), math.cos(angle))
+
+
+def clamp(value, limit):
+    return max(-limit, min(limit, value))
+
+
 class FmsBridge(Node):
     def __init__(self):
         super().__init__("mvch_fms_bridge")
@@ -83,6 +91,7 @@ class FmsBridge(Node):
         self.pose_offsets = {robot: {"x": 0.0, "y": 0.0, "yaw": 0.0} for robot in ROBOTS}
         self.raw_pose = {robot: {"x": 0.0, "y": 0.0, "yaw": 0.0} for robot in ROBOTS}
         self.goal_handles = {robot: None for robot in ROBOTS}
+        self.simple_goals = {robot: None for robot in ROBOTS}
 
         sensor_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -268,13 +277,17 @@ class FmsBridge(Node):
         now = time.monotonic()
         with self.lock:
             emergency = {r: self.state["robots"][r]["emergency"] for r in ROBOTS}
+            simple_goals = deepcopy(self.simple_goals)
         for robot in ROBOTS:
             stale = now - self.last_manual[robot] > MANUAL_TIMEOUT
-            if emergency[robot] or (stale and not self.last_sent_zero[robot]):
+            if emergency[robot]:
                 self.publish_twist(robot)
                 self.last_sent_zero[robot] = True
-            elif emergency[robot]:
+            elif simple_goals[robot] is not None:
+                self.drive_simple_goal(robot, simple_goals[robot])
+            elif stale and not self.last_sent_zero[robot]:
                 self.publish_twist(robot)
+                self.last_sent_zero[robot] = True
 
     def handle_command(self, command):
         kind = command.get("type")
@@ -285,10 +298,18 @@ class FmsBridge(Node):
             emergency = self.state["robots"][robot]["emergency"]
 
         if kind == "manual" and not emergency:
+            self.cancel_navigation(robot)
+            with self.lock:
+                self.simple_goals[robot] = None
+                self.state["robots"][robot]["goal"] = None
+                self.state["robots"][robot]["plan"] = []
             self.publish_twist(robot, command.get("x", 0), command.get("y", 0), command.get("yaw", 0))
             self.last_manual[robot] = time.monotonic()
             self.last_sent_zero[robot] = False
         elif kind == "stop":
+            self.cancel_navigation(robot)
+            with self.lock:
+                self.simple_goals[robot] = None
             self.publish_twist(robot)
             self.last_sent_zero[robot] = True
         elif kind == "emergency":
@@ -299,6 +320,8 @@ class FmsBridge(Node):
             self.last_sent_zero[robot] = True
             if active:
                 self.cancel_navigation(robot)
+                with self.lock:
+                    self.simple_goals[robot] = None
         elif kind == "set_pose":
             self.set_pose(robot, command.get("pose", {}))
         elif kind == "set_goal" and not emergency:
@@ -307,6 +330,7 @@ class FmsBridge(Node):
             self.cancel_navigation(robot)
             self.publish_twist(robot)
             with self.lock:
+                self.simple_goals[robot] = None
                 self.state["robots"][robot]["goal"] = None
                 self.state["robots"][robot]["plan"] = []
         elif kind == "lift" and robot == "RMC2" and not emergency:
@@ -366,7 +390,50 @@ class FmsBridge(Node):
             future = client.send_goal_async(request)
             future.add_done_callback(lambda f, r=robot: self.on_goal_response(r, f))
         else:
-            print(f"{robot}: Nav2 action is unavailable; goal_pose topic was published", file=sys.stderr, flush=True)
+            with self.lock:
+                self.simple_goals[robot] = target
+            print(f"{robot}: Nav2 is unavailable; using odometry goal controller", file=sys.stderr, flush=True)
+
+    def drive_simple_goal(self, robot, target):
+        with self.lock:
+            pose = deepcopy(self.state["robots"][robot]["pose"])
+        dx = target["x"] - pose["x"]
+        dy = target["y"] - pose["y"]
+        distance = math.hypot(dx, dy)
+
+        if distance < 0.12:
+            yaw_error = wrap_angle(target["yaw"] - pose["yaw"])
+            if abs(yaw_error) < 0.12:
+                self.publish_twist(robot)
+                with self.lock:
+                    self.simple_goals[robot] = None
+                self.last_sent_zero[robot] = True
+            else:
+                self.publish_twist(robot, yaw=clamp(yaw_error * 1.5, 0.65))
+                self.last_sent_zero[robot] = False
+            return
+
+        if robot == "RMC1":
+            cosine, sine = math.cos(pose["yaw"]), math.sin(pose["yaw"])
+            body_x = cosine * dx + sine * dy
+            body_y = -sine * dx + cosine * dy
+            self.publish_twist(
+                robot,
+                x=clamp(body_x * 0.7, 0.38),
+                y=clamp(body_y * 0.7, 0.38),
+                yaw=clamp(wrap_angle(target["yaw"] - pose["yaw"]), 0.45),
+            )
+        else:
+            heading_error = wrap_angle(math.atan2(dy, dx) - pose["yaw"])
+            if abs(heading_error) > 0.28:
+                self.publish_twist(robot, yaw=clamp(heading_error * 1.4, 0.7))
+            else:
+                self.publish_twist(
+                    robot,
+                    x=min(0.32, max(0.10, distance * 0.65)),
+                    yaw=clamp(heading_error * 1.2, 0.45),
+                )
+        self.last_sent_zero[robot] = False
 
     def on_goal_response(self, robot, future):
         handle = future.result()
@@ -432,4 +499,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

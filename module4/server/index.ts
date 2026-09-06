@@ -1,6 +1,7 @@
 import { dirname, join } from 'node:path'
 import type { Server, ServerWebSocket } from 'bun'
 import type { Command, FmsState } from '../src/types'
+import { isCommand } from './commands'
 import { applyMockCommand, initialState, tickMock } from './state'
 
 type WsData = { connectedAt: number }
@@ -13,12 +14,6 @@ let bridge: Bun.Subprocess<'pipe', 'pipe', 'inherit'> | null = null
 
 function json(data: unknown, status = 200): Response {
   return Response.json(data, { status, headers: { 'cache-control': 'no-store' } })
-}
-
-function isCommand(value: unknown): value is Command {
-  if (!value || typeof value !== 'object') return false
-  const item = value as Record<string, unknown>
-  return typeof item.type === 'string' && typeof item.robot === 'string' && ['RMC1', 'RMC2'].includes(item.robot)
 }
 
 function sendToBridge(command: Command): boolean {
@@ -112,6 +107,7 @@ const server = Bun.serve<WsData>({
     }
 
     const relative = url.pathname === '/' ? 'index.html' : url.pathname.slice(1)
+    if (relative.includes('..')) return new Response('Bad path', { status: 400 })
     const file = Bun.file(join(moduleDir, 'dist', relative))
     if (await file.exists()) return new Response(file)
     const fallback = Bun.file(join(moduleDir, 'dist', 'index.html'))

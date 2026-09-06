@@ -9,7 +9,8 @@
     "build": "tsc -b && vite build",
     "start": "bun run server/index.ts",
     "run": "bun run build && bun run start",
-    "check": "tsc -b"
+    "check": "tsc -b",
+    "test": "bun test"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.2.2",
@@ -26,4 +27,3 @@
     "typescript": "~5.8.3"
   }
 }
-

@@ -46,4 +46,3 @@ export type Command =
   | { type: 'cancel_goal'; robot: RobotId }
   | { type: 'lift'; robot: 'RMC2'; height: 0 | 0.1 }
   | { type: 'gripper'; robot: 'RMC1'; state: 'open' | 'closed' }
-
