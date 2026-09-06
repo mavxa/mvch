@@ -1,0 +1,29 @@
+{
+  "name": "mvch-module4-fms",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run scripts/dev.ts",
+    "mock": "MOCK_ROS=1 bun run scripts/dev.ts",
+    "build": "tsc -b && vite build",
+    "start": "bun run server/index.ts",
+    "run": "bun run build && bun run start",
+    "check": "tsc -b"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "^4.2.2",
+    "@vitejs/plugin-react-swc": "^3.11.0",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "tailwindcss": "^4.2.2",
+    "vite": "^6.4.2"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "~5.8.3"
+  }
+}
+
