@@ -60,7 +60,7 @@ def arguments():
         default=0.128,
         help="Высота верхней грани детали относительно Base_link, м",
     )
-    parser.add_argument("--pick-z", type=float, default=0.235)
+    parser.add_argument("--pick-z", type=float, default=0.210)
     parser.add_argument("--approach-z", type=float, default=0.38)
     parser.add_argument("--drop-x", type=float, help="Точка возврата; по умолчанию исходная")
     parser.add_argument("--drop-y", type=float, help="Точка возврата; по умолчанию исходная")
