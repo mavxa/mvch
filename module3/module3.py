@@ -481,6 +481,12 @@ def main():
         from tf_transformations import quaternion_from_euler
         from ultralytics import YOLO
     except ImportError as error:
+        if error.name == "transforms3d":
+            raise SystemExit(
+                "Venv не видит системные зависимости ROS. Включите их: "
+                "sed -i 's/include-system-site-packages = false/"
+                "include-system-site-packages = true/' .venv/pyvenv.cfg"
+            )
         raise SystemExit(
             f"Не удалось импортировать {error.name}: {error}. "
             "Выполните pip install -r requirements.txt после source ROS"

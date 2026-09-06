@@ -32,6 +32,15 @@ python3 -m venv --system-site-packages .venv
 Ограничение `numpy<2` нужно потому, что бинарный `cv_bridge` в этом образе ROS
 собран с NumPy 1.x.
 
+Если venv уже был создан без `--system-site-packages`, пересоздавать его не
+нужно. Включите системные зависимости ROS и заново активируйте окружение:
+
+```bash
+sed -i 's/include-system-site-packages = false/include-system-site-packages = true/' .venv/pyvenv.cfg
+deactivate
+source .venv/bin/activate
+```
+
 Запустите симулятор модуля В, затем в новом терминале:
 
 ```bash
