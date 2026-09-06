@@ -19,8 +19,18 @@ cd ~/scripts/mvch/module3
 sudo apt install python3-venv
 python3 -m venv --system-site-packages .venv
 .venv/bin/pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-.venv/bin/pip install ultralytics==8.3.0 tqdm ultralytics-thop --no-deps
+.venv/bin/pip install -r requirements.txt tqdm ultralytics-thop
 ```
+
+Если окружение уже обновило NumPy до 2.x и `cv_bridge` ругается на ABI:
+
+```bash
+.venv/bin/pip install --force-reinstall "numpy<2" "opencv-python<4.12" lark
+```
+
+`lark` — зависимость ROS 2 Launch/MoveIt, а не часть алгоритма распознавания.
+Ограничение `numpy<2` нужно потому, что бинарный `cv_bridge` в этом образе ROS
+собран с NumPy 1.x.
 
 Запустите симулятор модуля В, затем в новом терминале:
 

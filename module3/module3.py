@@ -459,6 +459,11 @@ def main():
     try:
         import cv2
         import numpy as np
+        if int(np.__version__.split(".", 1)[0]) >= 2:
+            raise SystemExit(
+                "NumPy 2.x несовместим с cv_bridge из ROS Jazzy. "
+                "Выполните: python3 -m pip install --force-reinstall 'numpy<2'"
+            )
         import rclpy
         import yaml
         from ament_index_python.packages import get_package_share_directory
@@ -476,7 +481,10 @@ def main():
         from tf_transformations import quaternion_from_euler
         from ultralytics import YOLO
     except ImportError as error:
-        raise SystemExit(f"Нет зависимости {error.name}: запускайте из module3/.venv после source ROS")
+        raise SystemExit(
+            f"Не удалось импортировать {error.name}: {error}. "
+            "Выполните pip install -r requirements.txt после source ROS"
+        )
 
     event_log = EventLog()
     event_log.write("START", target=requested, log=str(event_log.path))

@@ -5,5 +5,5 @@
 
 # база
 ```
-  pip install -U ultralytics
+  pip install -r ../requirements.txt
 ```
