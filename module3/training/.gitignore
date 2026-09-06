@@ -2,3 +2,5 @@
 .venv
 runs
 *.cache
+test
+valid
