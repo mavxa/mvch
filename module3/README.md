@@ -2,6 +2,56 @@
 
 Камера: `/RMC1/arm95/camera_gripper/image_color` (`1600x1200`).
 
+Основной зачетный скрипт: `module3.py`. Он показывает обработанный видеопоток,
+определяет координаты выбранной детали относительно `Base_link`, захватывает ее,
+возвращает ARM95 в исходное положение с деталью, кладет деталь обратно на
+освободившееся место и снова возвращает руку в исходное положение.
+
+## Запуск задания
+
+В VM один раз создайте окружение с доступом к системным пакетам ROS:
+
+```bash
+cd ~/scripts/mvch/module3
+sudo apt install python3-venv
+python3 -m venv --system-site-packages .venv
+.venv/bin/pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+.venv/bin/pip install ultralytics==8.3.0 tqdm ultralytics-thop --no-deps
+```
+
+Запустите симулятор модуля В, затем в новом терминале:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_ws/install/setup.bash
+cd ~/scripts/mvch
+module3/.venv/bin/python module3/module3.py --target 1
+```
+
+Цели: `1/hammer`, `2/wrench`, `3/pliers`. После того как эксперт зафиксировал
+видеопоток, нажмите `G` или `Space` в окне. `Esc` останавливает скрипт до начала
+движения.
+
+Сначала обязательно проверьте только координаты:
+
+```bash
+module3/.venv/bin/python module3/module3.py --target hammer --dry-run
+```
+
+Для проверки через SSH без окна:
+
+```bash
+module3/.venv/bin/python module3/module3.py --target hammer --dry-run --no-window
+```
+
+Геометрию реального стенда нельзя брать из симулятора вслепую. Перед зачетом
+измерьте и подстройте `--plane-z`, `--pick-z` и `--approach-z`. По умолчанию
+деталь возвращается туда, откуда была взята; другую свободную точку можно задать
+через `--drop-x X --drop-y Y`.
+
+События распознавания, координаты, построение движений и состояния схвата
+одновременно выводятся в терминал и сохраняются в `module3/logs/*.log`.
+
 ## Что размечать
 
 Классы строго в таком написании:
