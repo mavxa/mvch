@@ -144,10 +144,10 @@ class Detection:
         return (x1 + x2) / 2.0, (y1 + y2) / 2.0
 
 
-def find_target(result, frame, requested, cv2, np):
+def find_targets(result, frame, requested, cv2, np):
     found = []
     if result.boxes is None:
-        return None
+        return found
     for box in result.boxes:
         class_id = int(box.cls.item())
         name = str(result.names[class_id]).lower()
@@ -156,7 +156,21 @@ def find_target(result, frame, requested, cv2, np):
         confidence = float(box.conf.item())
         xyxy = tuple(float(value) for value in box.xyxy[0])
         found.append(Detection(name, confidence, xyxy, card_short_axis(frame, xyxy, cv2, np)))
-    return max(found, key=lambda item: item.confidence, default=None)
+    return found
+
+
+def choose_target(node, detections, plane_z):
+    """При одинаковых классах выбирает ближайшую к базе доступную деталь."""
+    reachable = []
+    for detection in detections:
+        try:
+            x, y, _ = estimate_pose(node, detection, plane_z)
+        except Exception:
+            continue
+        reachable.append((math.hypot(x, y), -detection.confidence, detection))
+    if reachable:
+        return min(reachable, key=lambda item: (item[0], item[1]))[2]
+    return max(detections, key=lambda item: item.confidence, default=None)
 
 
 def card_near_center(frame, requested, cv2, np):
@@ -361,7 +375,8 @@ def wait_for_trigger(args, node, model, requested, cv2, np, event_log):
             device=args.device,
             verbose=False,
         )[0]
-        last_detection = find_target(result, frame, requested, cv2, np)
+        detections = find_targets(result, frame, requested, cv2, np)
+        last_detection = choose_target(node, detections, args.plane_z)
         annotated = result.plot(labels=True, conf=True, line_width=2)
         if last_detection is not None:
             u, v = (int(value) for value in last_detection.center)
@@ -412,7 +427,8 @@ def fresh_detection(node, model, requested, args, cv2, np):
         device=args.device,
         verbose=False,
     )[0]
-    detection = find_target(result, frame, requested, cv2, np)
+    detections = find_targets(result, frame, requested, cv2, np)
+    detection = choose_target(node, detections, args.plane_z)
     if detection is None:
         raise RuntimeError(f"После установки руки не найден класс {requested}")
     return detection
