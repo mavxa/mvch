@@ -5,6 +5,7 @@ import argparse
 import json
 import math
 import os
+import sys
 import threading
 import time
 from datetime import datetime
@@ -426,6 +427,8 @@ def main():
     spin_thread = threading.Thread(target=executor.spin, daemon=True)
     spin_thread.start()
     model = YOLO(str(weights))
+    moveit_active = False
+    exit_code = 0
 
     try:
         detection = wait_for_trigger(args, node, model, requested, cv2, np, event_log)
@@ -466,6 +469,7 @@ def main():
                 event_log,
                 args.plan_only,
             )
+            moveit_active = True
         finally:
             Path(params_file).unlink(missing_ok=True)
         arm.open()
@@ -500,15 +504,25 @@ def main():
         event_log.write("DONE", message="Деталь возвращена, манипулятор в исходном положении")
     except KeyboardInterrupt:
         print("\n[STOP] Остановлено оператором")
+        exit_code = 130
     except Exception as error:
         event_log.write("FAILED", reason=str(error))
-        raise SystemExit(1)
+        exit_code = 1
     finally:
         cv2.destroyAllWindows()
         executor.shutdown()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
+        if moveit_active:
+            # MoveItPy в поставке Jazzy падает в C++-деструкторе после штатной
+            # работы. Все движения и логи уже завершены, поэтому не вызываем
+            # проблемный teardown при выходе единственного зачетного скрипта.
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(exit_code)
+    if exit_code:
+        raise SystemExit(exit_code)
 
 
 if __name__ == "__main__":
