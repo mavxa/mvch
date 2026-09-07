@@ -808,6 +808,8 @@ def run(args):
             event_log.write("LOCALIZED", robot=robot, marker=start_marker, odom=pose)
         motion = Motion(node, args, event_log, anchors)
         threading.Thread(target=terminal_commands, args=(node,), daemon=True).start()
+        parking = routes["rmc2_clear_assembly"][-1]
+        assembly_entry_yaw = face_marker(parking, scenario.assembly)
 
         node.set_lift(False, allow_already=True)
         motion.drive_route(
@@ -818,12 +820,11 @@ def run(args):
             "RMC2",
             "rack_to_assembly",
             routes["rmc2_to_assembly"],
-            args.rack_yaw,
+            assembly_entry_yaw,
             carrying=True,
             rack_exit=True,
         )
         node.set_lift(False)
-        parking = routes["rmc2_clear_assembly"][-1]
         motion.drive_route(
             "RMC2",
             "clear_assembly",
@@ -859,7 +860,7 @@ def run(args):
             "RMC2",
             "back_to_assembly",
             routes["rmc2_back_to_assembly"],
-            args.rack_yaw,
+            assembly_entry_yaw,
             rack_entry=True,
         )
         node.set_lift(True)
