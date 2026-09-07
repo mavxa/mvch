@@ -486,7 +486,9 @@ class Motion:
             front, scan_seen = self.node.scan(robot)
             fresh_scan = time.monotonic() - scan_seen <= self.args.sensor_timeout
             stop_distance = 0.34 if robot == "RMC2" else 0.30
-            rack_zone = allow_rack_entry and distance < 0.72
+            # Стеллаж имеет размер около 0.95 м и стоит центром на ArUco.
+            # На финальном въезде RMC2 штатно едет под его платформу.
+            rack_zone = allow_rack_entry and distance < 1.10
             blocked = fresh_scan and front < stop_distance and not rack_zone
             if blocked:
                 self.node.command(robot, immediate=True)
