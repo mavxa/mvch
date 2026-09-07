@@ -383,12 +383,16 @@ def build_ros_node(args, event_log):
                 self.lift_publisher.publish(Float64(data=height))
                 time.sleep(0.1)
             started = time.monotonic()
+            success = False
             while time.monotonic() - started < 6.0:
                 # Предыдущее действие тоже могло оставить status=success.
                 # Минимальная пауза соответствует ходу 0.1 м при 0.1 м/с.
                 if time.monotonic() - started >= 1.1 and "success" in self.lift_status.lower():
+                    success = True
                     break
                 time.sleep(0.1)
+            if not success:
+                raise RuntimeError(f"RMC2: лифт не завершил движение, status={self.lift_status}")
             event_log.write("LIFT_DONE", state="up" if raised else "down", status=self.lift_status)
 
     return WarehouseNode(), rclpy, MultiThreadedExecutor
