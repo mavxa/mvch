@@ -133,15 +133,21 @@ class Scenario:
             raise ValueError("delivery-approach должен быть соседней ячейкой")
         if self.assembly in self.blocked or self.rack in self.blocked:
             raise ValueError("Активный стеллаж и точка комплектации не должны быть в --blocked")
+        if self.rack == self.assembly:
+            raise ValueError("Стеллаж и точка комплектации должны отличаться")
 
     def routes(self):
         # Полка сдачи и чужие стеллажи считаются препятствиями для RMC2.
         rmc2_blocked = self.blocked | {self.delivery}
         # Для RMC1 стеллаж уже стоит в комплектации, а полка занята физически.
         rmc1_blocked = self.blocked | {self.assembly, self.delivery}
+        to_assembly = shortest_path(self.rack, self.assembly, rmc2_blocked)
+        parking = to_assembly[-2]
         return {
             "rmc2_to_rack": shortest_path(self.rmc2_start, self.rack, rmc2_blocked),
-            "rmc2_to_assembly": shortest_path(self.rack, self.assembly, rmc2_blocked),
+            "rmc2_to_assembly": to_assembly,
+            "rmc2_clear_assembly": [self.assembly, parking],
+            "rmc2_back_to_assembly": [parking, self.assembly],
             "rmc1_to_assembly": shortest_path(
                 self.rmc1_start, self.assembly_approach, rmc1_blocked
             ),
@@ -817,6 +823,14 @@ def run(args):
             rack_exit=True,
         )
         node.set_lift(False)
+        parking = routes["rmc2_clear_assembly"][-1]
+        motion.drive_route(
+            "RMC2",
+            "clear_assembly",
+            routes["rmc2_clear_assembly"],
+            face_marker(parking, scenario.assembly),
+            rack_exit=True,
+        )
 
         assembly_yaw = face_marker(scenario.assembly_approach, scenario.assembly)
         motion.drive_route(
@@ -841,6 +855,13 @@ def run(args):
         else:
             arm_workflow.place()
 
+        motion.drive_route(
+            "RMC2",
+            "back_to_assembly",
+            routes["rmc2_back_to_assembly"],
+            args.rack_yaw,
+            rack_entry=True,
+        )
         node.set_lift(True)
         motion.drive_route(
             "RMC2",
@@ -849,6 +870,7 @@ def run(args):
             args.rack_yaw,
             carrying=True,
             rack_entry=True,
+            rack_exit=True,
         )
         node.set_lift(False)
         motion.drive_route(
