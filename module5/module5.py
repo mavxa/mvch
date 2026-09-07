@@ -276,6 +276,7 @@ def build_ros_node(args, event_log):
             self.emergency = threading.Event()
             self.abort = threading.Event()
             self.lift_status = "unknown"
+            self.lift_updates = 0
             self.cmd_publishers = {
                 name: self.create_publisher(Twist, f"/{name}/cmd_vel", 10)
                 for name in ROBOT_NAMES
@@ -323,7 +324,9 @@ def build_ros_node(args, event_log):
                 self.scan_seen[robot] = time.monotonic()
 
         def on_lift(self, message):
-            self.lift_status = str(message.data)
+            with self.lock:
+                self.lift_status = str(message.data)
+                self.lift_updates += 1
 
         def on_stop(self, message):
             if message.data:
@@ -376,24 +379,37 @@ def build_ros_node(args, event_log):
                     self.command(robot, immediate=True)
                 time.sleep(0.04)
 
-        def set_lift(self, raised):
+        def set_lift(self, raised, allow_already=False):
             height = 0.1 if raised else 0.0
             event_log.write("LIFT_COMMAND", state="up" if raised else "down", height=height)
+            with self.lock:
+                updates_before = self.lift_updates
             for _ in range(5):
                 self.lift_publisher.publish(Float64(data=height))
                 time.sleep(0.1)
             started = time.monotonic()
             success = False
             while time.monotonic() - started < 6.0:
-                # Предыдущее действие тоже могло оставить status=success.
-                # Минимальная пауза соответствует ходу 0.1 м при 0.1 м/с.
-                if time.monotonic() - started >= 1.1 and "success" in self.lift_status.lower():
+                with self.lock:
+                    status = self.lift_status
+                    received_update = self.lift_updates > updates_before
+                # Драйвер публикует status только при его изменении. Если лифт уже
+                # был внизу до нашей подписки, команда down не создаст сообщения.
+                if time.monotonic() - started >= 1.1 and received_update and "success" in status.lower():
+                    success = True
+                    break
+                if time.monotonic() - started >= 1.3 and allow_already and not received_update:
+                    event_log.write(
+                        "LIFT_ALREADY_AT_TARGET",
+                        state="up" if raised else "down",
+                        status=status,
+                    )
                     success = True
                     break
                 time.sleep(0.1)
             if not success:
-                raise RuntimeError(f"RMC2: лифт не завершил движение, status={self.lift_status}")
-            event_log.write("LIFT_DONE", state="up" if raised else "down", status=self.lift_status)
+                raise RuntimeError(f"RMC2: лифт не завершил движение, status={status}")
+            event_log.write("LIFT_DONE", state="up" if raised else "down", status=status)
 
     return WarehouseNode(), rclpy, MultiThreadedExecutor
 
@@ -781,7 +797,7 @@ def run(args):
         motion = Motion(node, args, event_log, anchors)
         threading.Thread(target=terminal_commands, args=(node,), daemon=True).start()
 
-        node.set_lift(False)
+        node.set_lift(False, allow_already=True)
         motion.drive_route(
             "RMC2", "to_rack", routes["rmc2_to_rack"], args.rack_yaw, rack_entry=True
         )
