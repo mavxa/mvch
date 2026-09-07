@@ -261,6 +261,9 @@ def build_ros_node(args, event_log):
     from sensor_msgs.msg import LaserScan
     from std_msgs.msg import Bool, Float64, String
 
+    if not rclpy.ok():
+        rclpy.init()
+
     class WarehouseNode(Node):
         def __init__(self):
             super().__init__("mvch_module5")
