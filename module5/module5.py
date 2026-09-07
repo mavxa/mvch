@@ -848,15 +848,11 @@ def run(args):
             arm_workflow.close()
         if not executor.shutdown(timeout_sec=2.0):
             event_log.write("SHUTDOWN_TIMEOUT", component="ROS executor")
-        node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
-        if arm_workflow is not None:
-            # MoveItPy Jazzy иногда падает в C++-деструкторе после успешной работы.
-            # Все команды, остановка и логи к этому моменту уже завершены.
-            sys.stdout.flush()
-            sys.stderr.flush()
-            os._exit(exit_code)
+        # rclpy/MoveItPy Jazzy иногда зависают или падают в C++-деструкторах.
+        # Нулевые скорости и логи уже отправлены; ОС безопасно освободит ресурсы.
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(exit_code)
     return exit_code
 
 
