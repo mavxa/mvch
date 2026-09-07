@@ -4,6 +4,7 @@
 import argparse
 import json
 import math
+import os
 import sys
 import threading
 import time
@@ -11,6 +12,8 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from tempfile import NamedTemporaryFile
+from types import SimpleNamespace
 
 
 HERE = Path(__file__).resolve().parent
@@ -190,9 +193,29 @@ def arguments():
     parser.add_argument("--auto", action="store_true", help="Не ждать Enter перед стартом")
     parser.add_argument("--dry-run", action="store_true", help="Показать сценарий без ROS")
     parser.add_argument("--skip-arm", action="store_true", help="Только роверы и лифт")
+    parser.add_argument("--weights", default="module3/models/latest.pt")
+    parser.add_argument(
+        "--camera-topic", default="/RMC1/arm95/camera_gripper/image_color"
+    )
+    parser.add_argument("--conf", type=float, default=0.20)
+    parser.add_argument("--vision-timeout", type=float, default=60.0)
+    parser.add_argument("--plane-z", type=float, default=0.128)
+    parser.add_argument("--pick-z", type=float, default=0.210)
+    parser.add_argument("--approach-z", type=float, default=0.38)
+    parser.add_argument("--drop-arm-x", type=float, default=0.55)
+    parser.add_argument("--drop-arm-y", type=float, default=0.0)
+    parser.add_argument("--drop-arm-z", type=float, default=0.220)
+    parser.add_argument("--drop-arm-yaw", type=float, default=math.pi / 2)
     parser.add_argument("--sensor-timeout", type=float, default=3.0)
     parser.add_argument("--waypoint-timeout", type=float, default=35.0)
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not 0.0 <= args.conf <= 1.0:
+        parser.error("--conf должен быть от 0 до 1")
+    if args.approach_z <= max(args.pick_z, args.drop_arm_z):
+        parser.error("--approach-z должен быть выше pick/drop")
+    if min(args.sensor_timeout, args.waypoint_timeout, args.vision_timeout) <= 0:
+        parser.error("таймауты должны быть положительными")
+    return args
 
 
 def make_scenario(args):
@@ -486,6 +509,198 @@ class Motion:
         raise RuntimeError(f"{robot}: таймаут движения к marker {marker}")
 
 
+class ArmWorkflow:
+    """Тонкая обвязка проверенного зрения и MoveIt из модуля В."""
+
+    def __init__(self, args, event_log, executor, target):
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+        try:
+            import cv2
+            import numpy as np
+            import yaml
+            from ament_index_python.packages import get_package_share_directory
+            from cv_bridge import CvBridge
+            from geometry_msgs.msg import PoseStamped
+            from moveit.planning import MoveItPy
+            from moveit_configs_utils import MoveItConfigsBuilder
+            from rclpy.duration import Duration
+            from rclpy.node import Node
+            from rclpy.qos import qos_profile_sensor_data
+            from rclpy.time import Time
+            from sensor_msgs.msg import CameraInfo, Image
+            from tf2_ros import Buffer, TransformListener
+            from tf_transformations import quaternion_from_euler
+            from ultralytics import YOLO
+            from module3.module3 import (
+                Arm,
+                build_vision_node,
+                card_near_center,
+                choose_target,
+                estimate_pose,
+                find_targets,
+            )
+        except ImportError as error:
+            raise RuntimeError(
+                f"Нет зависимости {error.name}: запустите из module3/.venv "
+                "после source ROS или используйте --skip-arm"
+            ) from error
+
+        if int(np.__version__.split(".", 1)[0]) >= 2:
+            raise RuntimeError("Для cv_bridge нужен numpy<2 в module3/.venv")
+        weights = Path(args.weights).expanduser()
+        if not weights.is_absolute():
+            weights = ROOT / weights
+        if not weights.is_file():
+            raise RuntimeError(f"Не найдены веса YOLO: {weights}")
+
+        self.args = args
+        self.log = event_log
+        self.executor = executor
+        self.target = target
+        self.cv2 = cv2
+        self.np = np
+        self.find_targets = find_targets
+        self.choose_target = choose_target
+        self.estimate_pose = estimate_pose
+        self.card_near_center = card_near_center
+        imports = (
+            Node,
+            CvBridge,
+            Image,
+            CameraInfo,
+            qos_profile_sensor_data,
+            Buffer,
+            TransformListener,
+            Duration,
+            Time,
+        )
+        self.vision = build_vision_node(SimpleNamespace(topic=args.camera_topic), imports)
+        executor.add_node(self.vision)
+        self.model = YOLO(str(weights))
+        self.log.write("VISION_READY", target=target, weights=str(weights))
+
+        package_dir = Path(get_package_share_directory("ar_webots_fms_ros2"))
+        moveit_config = (
+            MoveItConfigsBuilder("arm95")
+            .robot_description(file_path=str(package_dir / "resource/urdf/arm95_webots.urdf"))
+            .trajectory_execution(
+                file_path=str(package_dir / "resource/config/moveit_controllers.yaml")
+            )
+            .moveit_cpp(file_path=str(package_dir / "resource/config/moveit_cpp.yaml"))
+            .to_moveit_configs()
+            .to_dict()
+        )
+        moveit_config["use_sim_time"] = True
+        with NamedTemporaryFile("w", suffix=".yaml", delete=False) as stream:
+            yaml.safe_dump({"/**": {"ros__parameters": moveit_config}}, stream)
+            params_file = stream.name
+        try:
+            self.arm = Arm(
+                MoveItPy,
+                params_file,
+                PoseStamped,
+                quaternion_from_euler,
+                event_log,
+            )
+        finally:
+            Path(params_file).unlink(missing_ok=True)
+        self.log.write("MOVEIT_READY")
+
+    def detect(self):
+        started = time.monotonic()
+        last_report = 0.0
+        seen = {}
+        while time.monotonic() - started < self.args.vision_timeout:
+            frame = self.vision.latest_frame()
+            if frame is None:
+                time.sleep(0.05)
+                continue
+            result = self.model.predict(
+                source=frame,
+                conf=self.args.conf,
+                imgsz=512,
+                device="cpu",
+                verbose=False,
+            )[0]
+            if result.boxes is not None:
+                for box in result.boxes:
+                    name = str(result.names[int(box.cls.item())]).lower()
+                    seen[name] = max(seen.get(name, 0.0), float(box.conf.item()))
+            detections = self.find_targets(
+                result, frame, self.target, self.cv2, self.np
+            )
+            detection = self.choose_target(self.vision, detections, self.args.plane_z)
+            if detection is not None:
+                self.log.write(
+                    "DETECTION",
+                    target=self.target,
+                    confidence=round(detection.confidence, 4),
+                )
+                return detection
+            if time.monotonic() - last_report > 5.0:
+                self.log.write(
+                    "VISION_WAIT",
+                    target=self.target,
+                    seen={key: round(value, 3) for key, value in seen.items()},
+                )
+                last_report = time.monotonic()
+        raise RuntimeError(
+            f"Класс {self.target} не найден за {self.args.vision_timeout:.0f} с; "
+            f"видел: {seen or 'ничего'}"
+        )
+
+    def pick(self):
+        self.log.write("ARM_STAGE", stage="pick_start")
+        self.arm.open()
+        self.arm.initial("транспортировочное положение перед захватом")
+        detection = self.detect()
+        x, y, yaw = self.estimate_pose(self.vision, detection, self.args.plane_z)
+        self.log.write("PICK_TARGET", x=round(x, 4), y=round(y, 4), yaw=round(yaw, 4))
+        self.arm.pose(x, y, self.args.approach_z, yaw, "подход над деталью")
+
+        # Камера приблизилась: уточняем положение по контуру карточки.
+        time.sleep(0.6)
+        frame = self.vision.latest_frame()
+        if frame is not None:
+            try:
+                close = self.card_near_center(frame, self.target, self.cv2, self.np)
+                refined_x, refined_y, refined_yaw = self.estimate_pose(
+                    self.vision, close, self.args.plane_z
+                )
+                correction = math.hypot(refined_x - x, refined_y - y)
+                if correction <= 0.12:
+                    x, y, yaw = refined_x, refined_y, refined_yaw
+                    self.log.write("PICK_REFINED", correction=round(correction, 4))
+            except Exception as error:
+                self.log.write("PICK_REFINE_SKIPPED", reason=str(error))
+
+        self.arm.pose(x, y, self.args.approach_z, yaw, "точный подход")
+        self.arm.pose(x, y, self.args.pick_z, yaw, "опустить схват")
+        self.arm.close()
+        self.arm.pose(x, y, self.args.approach_z, yaw, "поднять деталь")
+        self.arm.initial("транспортировочное положение с деталью")
+        self.log.write("DETAIL_PICKED", target=self.target)
+
+    def place(self):
+        self.log.write("ARM_STAGE", stage="place_start")
+        x, y = self.args.drop_arm_x, self.args.drop_arm_y
+        yaw = self.args.drop_arm_yaw
+        self.arm.pose(x, y, self.args.approach_z, yaw, "подход к полке сдачи")
+        self.arm.pose(x, y, self.args.drop_arm_z, yaw, "опустить деталь на полку")
+        self.arm.open()
+        self.arm.pose(x, y, self.args.approach_z, yaw, "отойти от детали")
+        self.arm.initial("транспортировочное положение без детали")
+        self.log.write("DETAIL_PLACED", target=self.target)
+
+    def close(self):
+        try:
+            self.executor.remove_node(self.vision)
+            self.vision.destroy_node()
+        except Exception:
+            pass
+
+
 def terminal_commands(node):
     while not node.abort.is_set():
         try:
@@ -533,6 +748,7 @@ def run(args):
     spin_thread = threading.Thread(target=executor.spin, daemon=True)
     spin_thread.start()
     exit_code = 0
+    arm_workflow = None
     try:
         initial_motion = Motion(node, args, event_log, {})
         initial_motion.wait_ready()
@@ -569,14 +785,21 @@ def run(args):
         if args.skip_arm:
             event_log.write("ARM_SKIPPED", stage="pick", reason="--skip-arm")
         else:
-            raise RuntimeError("Манипулятор будет подключен следующим коммитом; пока используйте --skip-arm")
+            arm_workflow = ArmWorkflow(args, event_log, executor, target)
+            arm_workflow.pick()
 
         delivery_yaw = face_marker(scenario.delivery_approach, scenario.delivery)
         motion.drive_route(
-            "RMC1", "to_delivery", routes["rmc1_to_delivery"], delivery_yaw, carrying=True
+            "RMC1",
+            "to_delivery",
+            routes["rmc1_to_delivery"],
+            delivery_yaw,
+            carrying=not args.skip_arm,
         )
         if args.skip_arm:
             event_log.write("ARM_SKIPPED", stage="place", reason="--skip-arm")
+        else:
+            arm_workflow.place()
 
         node.set_lift(True)
         motion.drive_route(
@@ -608,10 +831,18 @@ def run(args):
     finally:
         node.abort.set()
         node.stop_all()
+        if arm_workflow is not None:
+            arm_workflow.close()
         executor.shutdown()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
+        if arm_workflow is not None:
+            # MoveItPy Jazzy иногда падает в C++-деструкторе после успешной работы.
+            # Все команды, остановка и логи к этому моменту уже завершены.
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(exit_code)
     return exit_code
 
 
