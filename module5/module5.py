@@ -449,7 +449,10 @@ class Motion:
                 raise RuntimeError("Остановлено оператором")
             time.sleep(0.1)
 
-    def drive_route(self, robot, name, route, final_world_yaw, carrying=False, rack_entry=False):
+    def drive_route(
+        self, robot, name, route, final_world_yaw, carrying=False,
+        rack_entry=False, rack_exit=False,
+    ):
         self.log.write("ROUTE", robot=robot, stage=name, markers=route, carrying=carrying)
         for index, marker in enumerate(route[1:], start=1):
             x, y = marker_xy(marker)
@@ -464,7 +467,8 @@ class Motion:
                 marker,
                 target,
                 carrying=carrying,
-                allow_rack_entry=rack_entry and index == len(route) - 1,
+                allow_rack_entry=(rack_entry and index == len(route) - 1)
+                or (rack_exit and index == 1),
             )
         self.log.write("ROUTE_DONE", robot=robot, stage=name, marker=route[-1])
 
@@ -810,6 +814,7 @@ def run(args):
             routes["rmc2_to_assembly"],
             args.rack_yaw,
             carrying=True,
+            rack_exit=True,
         )
         node.set_lift(False)
 
@@ -843,13 +848,15 @@ def run(args):
             routes["rmc2_return_rack"],
             args.rack_yaw,
             carrying=True,
+            rack_entry=True,
         )
         node.set_lift(False)
         motion.drive_route(
             "RMC1", "return_start", routes["rmc1_return"], args.rmc1_start_yaw
         )
         motion.drive_route(
-            "RMC2", "return_start", routes["rmc2_return"], args.rmc2_start_yaw
+            "RMC2", "return_start", routes["rmc2_return"], args.rmc2_start_yaw,
+            rack_exit=True,
         )
         event_log.write(
             "MISSION_FINISHED",
