@@ -276,7 +276,7 @@ def build_ros_node(args, event_log):
             self.emergency = threading.Event()
             self.abort = threading.Event()
             self.lift_status = "unknown"
-            self.publishers = {
+            self.cmd_publishers = {
                 name: self.create_publisher(Twist, f"/{name}/cmd_vel", 10)
                 for name in ROBOT_NAMES
             }
@@ -367,7 +367,7 @@ def build_ros_node(args, event_log):
             message.linear.x = next_x
             message.linear.y = next_y if robot == "RMC1" else 0.0
             message.angular.z = next_yaw
-            self.publishers[robot].publish(message)
+            self.cmd_publishers[robot].publish(message)
             self.last_command[robot] = (next_x, next_y, next_yaw, now)
 
         def stop_all(self):
