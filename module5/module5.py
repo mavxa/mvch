@@ -380,8 +380,10 @@ def build_ros_node(args, event_log):
                 self.lift_publisher.publish(Float64(data=height))
                 time.sleep(0.1)
             started = time.monotonic()
-            while time.monotonic() - started < 5.0:
-                if "success" in self.lift_status.lower():
+            while time.monotonic() - started < 6.0:
+                # Предыдущее действие тоже могло оставить status=success.
+                # Минимальная пауза соответствует ходу 0.1 м при 0.1 м/с.
+                if time.monotonic() - started >= 1.1 and "success" in self.lift_status.lower():
                     break
                 time.sleep(0.1)
             event_log.write("LIFT_DONE", state="up" if raised else "down", status=self.lift_status)
@@ -399,11 +401,19 @@ class Motion:
     def wait_ready(self):
         deadline = time.monotonic() + 20.0
         while time.monotonic() < deadline:
-            if all(self.node.pose(robot)[0] is not None for robot in ROBOT_NAMES):
+            odometry_ready = all(
+                self.node.pose(robot)[0] is not None for robot in ROBOT_NAMES
+            )
+            lidar_ready = all(self.node.scan(robot)[1] > 0.0 for robot in ROBOT_NAMES)
+            if odometry_ready and lidar_ready:
                 return
             time.sleep(0.1)
-        missing = [robot for robot in ROBOT_NAMES if self.node.pose(robot)[0] is None]
-        raise RuntimeError(f"Нет odometry: {', '.join(missing)}")
+        missing_odom = [robot for robot in ROBOT_NAMES if self.node.pose(robot)[0] is None]
+        missing_lidar = [robot for robot in ROBOT_NAMES if self.node.scan(robot)[1] == 0.0]
+        raise RuntimeError(
+            f"Датчики не готовы; odometry={missing_odom or 'ok'}, "
+            f"scan_front={missing_lidar or 'ok'}"
+        )
 
     def wait_if_stopped(self):
         announced = False
