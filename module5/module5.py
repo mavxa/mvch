@@ -101,6 +101,7 @@ class EventLog:
             print(line, flush=True)
             with self.path.open("a", encoding="utf-8") as stream:
                 stream.write(line + "\n")
+                stream.flush()
                 os.fsync(stream.fileno())
 
 
