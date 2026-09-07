@@ -846,7 +846,8 @@ def run(args):
         node.stop_all()
         if arm_workflow is not None:
             arm_workflow.close()
-        executor.shutdown()
+        if not executor.shutdown(timeout_sec=2.0):
+            event_log.write("SHUTDOWN_TIMEOUT", component="ROS executor")
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
