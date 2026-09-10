@@ -19,20 +19,17 @@ from datetime import datetime
 from pathlib import Path
 
 
-# Все параметры модуля Б находятся здесь. Перед реальным полем меняются в одном месте.
-ROWS = 6
-COLS = 6
-MARKER_SPACING = 1.0
+# Профили поля из симулятора и документации физических РМК от 08.09.2026.
+SIM_FIELD = (6, 6, 1.0)
+REAL_FIELD = (5, 5, 1.0)
 BLOCKED_MARKERS = set()
 
 ROBOT_NAMESPACE = "RMC2"
 MARKER_PREFIX = "aruco_"
-# RMC2.proto: край корпуса находится примерно в 0.373 м от base_link.
-# Четыре сантиметра запаса оставляют проходимым узкий коридор у marker 33.
-ROBOT_HALF_LENGTH = 0.375
-ROBOT_HALF_WIDTH = 0.375
+# В Webots край корпуса около 0.375 м. Реальный RMC2 имеет габарит до 0.870 м.
+SIM_HALF_SIZE = 0.375
+REAL_HALF_SIZE = 0.435
 SAFETY_MARGIN = 0.04
-ROUTE_CLEARANCE = 0.44
 
 MAX_LINEAR = 0.25
 MAX_ANGULAR = 0.45
@@ -84,17 +81,21 @@ def segment_distance(point, a, b):
 class Field:
     """Регулярная сетка ArUco и кратчайший путь по ней."""
 
-    def __init__(self):
+    def __init__(self, rows, columns, spacing, clearance):
+        self.rows = rows
+        self.columns = columns
+        self.spacing = spacing
+        self.clearance = clearance
         self.poses = {}
         self.graph = {}
-        for row in range(ROWS):
-            for col in range(COLS):
-                marker = row*COLS+col
-                self.poses[marker] = (-row*MARKER_SPACING, col*MARKER_SPACING, 0.0)
+        for row in range(rows):
+            for col in range(columns):
+                marker = row*columns+col
+                self.poses[marker] = (-row*spacing, col*spacing, 0.0)
                 self.graph[marker] = [
-                    r*COLS+c for r, c in
+                    r*columns+c for r, c in
                     ((row+1, col), (row, col+1), (row-1, col), (row, col-1))
-                    if 0 <= r < ROWS and 0 <= c < COLS
+                    if 0 <= r < rows and 0 <= c < columns
                 ]
 
     def nearest(self, x, y):
@@ -126,7 +127,7 @@ class Field:
                 if neighbor in BLOCKED_MARKERS or edge in forbidden:
                     continue
                 a, b = self.poses[current], self.poses[neighbor]
-                if any(segment_distance(p, a, b) < ROUTE_CLEARANCE for p in obstacle_points):
+                if any(segment_distance(p, a, b) < self.clearance for p in obstacle_points):
                     continue
                 new_cost = cost+distance(a, b)
                 if new_cost < costs.get(neighbor, math.inf):
@@ -161,7 +162,9 @@ def arguments():
 
 def main():
     args = arguments()
-    field = Field()
+    rows, columns, spacing = SIM_FIELD if args.sim else REAL_FIELD
+    half_size = SIM_HALF_SIZE if args.sim else REAL_HALF_SIZE
+    field = Field(rows, columns, spacing, half_size+SAFETY_MARGIN)
     target = args.target if args.target is not None else field.nearest(*args.xy)
     if target not in field.poses or target in BLOCKED_MARKERS:
         raise SystemExit("Целевая метка отсутствует в графе или заблокирована")
@@ -174,11 +177,17 @@ def main():
     from nav_msgs.msg import Odometry
     from rclpy.clock import Clock, ClockType
     from rclpy.node import Node
-    from rclpy.qos import qos_profile_sensor_data
+    from rclpy.qos import (
+        DurabilityPolicy,
+        QoSProfile,
+        ReliabilityPolicy,
+        qos_profile_sensor_data,
+    )
     from rclpy.signals import SignalHandlerOptions
     from rclpy.time import Time
     from sensor_msgs.msg import LaserScan
     from std_msgs.msg import Bool, String
+    from tf2_msgs.msg import TFMessage
     from tf2_ros import Buffer, TransformListener, TransformException
 
     def yaw(q):
@@ -203,18 +212,41 @@ def main():
             }
             self.robot = {
                 "namespace": ROBOT_NAMESPACE, "marker_prefix": MARKER_PREFIX,
-                "clearance": ROUTE_CLEARANCE, "half_length": ROBOT_HALF_LENGTH,
-                "half_width": ROBOT_HALF_WIDTH, "safety_margin": SAFETY_MARGIN,
+                "clearance": half_size+SAFETY_MARGIN,
+                "half_length": half_size,
+                "half_width": half_size,
+                "safety_margin": SAFETY_MARGIN,
             }
             ns = ROBOT_NAMESPACE.strip("/")
             self.base, self.odom_frame = f"{ns}/base_link", f"{ns}/odom"
             self.buffer = Buffer()
             self.listener = TransformListener(self.buffer, self)
+            if not args.sim:
+                # На физических РМК TF опубликован в namespaced-топиках.
+                tf_qos = QoSProfile(
+                    depth=100,
+                    reliability=ReliabilityPolicy.BEST_EFFORT,
+                    durability=DurabilityPolicy.VOLATILE,
+                )
+                static_tf_qos = QoSProfile(
+                    depth=100,
+                    reliability=ReliabilityPolicy.RELIABLE,
+                    durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                )
+                self.create_subscription(
+                    TFMessage, f"/{ns}/tf", self.on_tf, tf_qos
+                )
+                self.create_subscription(
+                    TFMessage, f"/{ns}/tf_static", self.on_tf_static, static_tf_qos
+                )
             self.pub = self.create_publisher(Twist, f"/{ns}/cmd_vel", 1)
             self.status_pub = self.create_publisher(String, "/mvch/status", 10)
             self.create_subscription(Odometry, f"/{ns}/odometry", self.on_odom, qos_profile_sensor_data)
             self.create_subscription(LaserScan, f"/{ns}/scan", self.on_scan, qos_profile_sensor_data)
-            self.create_subscription(String, f"/{ns}/aruco_id", self.on_marker, 10)
+            aruco_topic = (
+                f"/{ns}/aruco_id" if args.sim else f"/{ns}/camera_bottom/aruco_id"
+            )
+            self.create_subscription(String, aruco_topic, self.on_marker, 10)
             self.create_subscription(Bool, "/mvch/emergency_stop", self.on_stop, 10)
             self.create_subscription(String, "/mvch/command", lambda m: self.commands.put(m.data), 10)
             self.commands = queue.Queue()
@@ -250,7 +282,16 @@ def main():
             # Таймер на монотонных часах: остановка сработает даже при паузе /clock.
             self.timer = self.create_timer(0.05, self.tick, clock=Clock(clock_type=ClockType.STEADY_TIME))
             self.log("READY", target=target, config="constants in module_b.py", sim=args.sim,
+                     field=f"{rows}x{columns}", aruco_topic=aruco_topic,
                      instructions="Enter/go: старт; return: построить возврат; stop/resume; quit")
+
+        def on_tf(self, message):
+            for transform in message.transforms:
+                self.buffer.set_transform(transform, "RMC2 namespaced tf")
+
+        def on_tf_static(self, message):
+            for transform in message.transforms:
+                self.buffer.set_transform_static(transform, "RMC2 namespaced tf_static")
 
         def now(self):
             return self.get_clock().now().nanoseconds / 1e9

@@ -49,7 +49,19 @@ def arguments():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", help="1/hammer, 2/wrench или 3/pliers")
     parser.add_argument("--weights", default="models/latest.pt")
-    parser.add_argument("--topic", default="/RMC1/arm95/camera_gripper/image_color")
+    parser.add_argument("--sim", action="store_true", help="Камера/TF и часы Webots")
+    parser.add_argument("--topic", help="ROS-топик камеры; по умолчанию выбирается по --sim")
+    parser.add_argument("--camera-info-topic")
+    parser.add_argument(
+        "--compressed",
+        action="store_true",
+        help="Топик имеет тип sensor_msgs/CompressedImage, а не Image",
+    )
+    parser.add_argument("--base-frame", default="Base_link")
+    parser.add_argument("--fx", type=float, help="Фокус X, если CameraInfo отсутствует")
+    parser.add_argument("--fy", type=float, help="Фокус Y, если CameraInfo отсутствует")
+    parser.add_argument("--cx", type=float, help="Главная точка X")
+    parser.add_argument("--cy", type=float, help="Главная точка Y")
     parser.add_argument("--conf", type=float, default=0.20)
     parser.add_argument("--imgsz", type=int, default=512)
     parser.add_argument("--device", default="cpu")
@@ -70,12 +82,26 @@ def arguments():
     parser.add_argument("--plan-only", action="store_true", help="Спланировать подход, не двигать руку")
     args = parser.parse_args()
 
+    if args.topic is None:
+        args.topic = (
+            "/RMC1/arm95/camera_gripper/image_color"
+            if args.sim
+            else "/RMC1/arm95/svcam/right/image/compressed"
+        )
+
     if not 0.0 <= args.conf <= 1.0:
         parser.error("--conf должен быть от 0 до 1")
     if args.timeout <= 0 or args.approach_z <= args.pick_z:
         parser.error("timeout > 0, approach-z должен быть выше pick-z")
     if (args.drop_x is None) != (args.drop_y is None):
         parser.error("--drop-x и --drop-y задаются вместе")
+    intrinsics = (args.fx, args.fy, args.cx, args.cy)
+    if any(value is not None for value in intrinsics) and not all(
+        value is not None and math.isfinite(value) for value in intrinsics
+    ):
+        parser.error("--fx, --fy, --cx и --cy задаются только вместе")
+    if args.fx is not None and (args.fx <= 0 or args.fy <= 0):
+        parser.error("--fx и --fy должны быть больше нуля")
     return args
 
 
@@ -213,18 +239,24 @@ def card_near_center(frame, requested, cv2, np):
 
 
 def estimate_pose(node, detection, plane_z):
-    if node.camera_info is None:
-        raise RuntimeError("Нет CameraInfo")
-    frame = node.camera_frame or node.camera_info.header.frame_id
+    if node.camera_info is None and node.manual_k is None:
+        raise RuntimeError(
+            f"Нет CameraInfo с {node.info_topic}; задайте калибровку --fx/--fy/--cx/--cy"
+        )
+    frame = node.camera_frame or (
+        node.camera_info.header.frame_id if node.camera_info is not None else ""
+    )
+    if not frame:
+        raise RuntimeError("В сообщении камеры не указан frame_id")
     transform = node.tf_buffer.lookup_transform(
-        "Base_link", frame, node.Time(), timeout=node.Duration(seconds=1.0)
+        node.base_frame, frame, node.Time(), timeout=node.Duration(seconds=1.0)
     )
     translation = transform.transform.translation
     rotation = transform.transform.rotation
     quaternion = (rotation.x, rotation.y, rotation.z, rotation.w)
 
     u, v = detection.center
-    matrix = node.camera_info.k
+    matrix = node.camera_info.k if node.camera_info is not None else node.manual_k
     fx, fy, cx, cy = matrix[0], matrix[4], matrix[2], matrix[5]
     ray_camera = ((u - cx) / fx, (v - cy) / fy, 1.0)
     ray_base = rotate_vector(ray_camera, quaternion)
@@ -249,27 +281,93 @@ def estimate_pose(node, detection, plane_z):
 
 
 def build_vision_node(args, imports):
-    Node, CvBridge, Image, CameraInfo, qos, Buffer, TransformListener, Duration, Time = imports
+    (
+        Node,
+        CvBridge,
+        Image,
+        CompressedImage,
+        CameraInfo,
+        qos,
+        Buffer,
+        TransformListener,
+        Duration,
+        Time,
+        TFMessage,
+        Parameter,
+        QoSProfile,
+        ReliabilityPolicy,
+        DurabilityPolicy,
+    ) = imports
 
     class VisionNode(Node):
         def __init__(self):
             super().__init__("mvch_module3_vision")
+            self.set_parameters(
+                [Parameter("use_sim_time", value=args.sim)]
+            )
             self.Duration = Duration
             self.Time = Time
+            self.base_frame = args.base_frame
             self.bridge = CvBridge()
             self.frame = None
             self.camera_info = None
+            self.manual_k = (
+                (args.fx, 0.0, args.cx, 0.0, args.fy, args.cy, 0.0, 0.0, 1.0)
+                if args.fx is not None
+                else None
+            )
             self.camera_frame = None
             self.lock = threading.Lock()
             self.tf_buffer = Buffer()
             self.tf_listener = TransformListener(self.tf_buffer, self)
-            self.create_subscription(Image, args.topic, self.on_image, qos)
-            info_topic = args.topic.rsplit("/", 1)[0] + "/camera_info"
+            if not args.sim:
+                tf_qos = QoSProfile(
+                    depth=100,
+                    reliability=ReliabilityPolicy.BEST_EFFORT,
+                    durability=DurabilityPolicy.VOLATILE,
+                )
+                static_tf_qos = QoSProfile(
+                    depth=100,
+                    reliability=ReliabilityPolicy.RELIABLE,
+                    durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                )
+                self.create_subscription(
+                    TFMessage, "/RMC1/tf", self.on_tf, tf_qos
+                )
+                self.create_subscription(
+                    TFMessage, "/RMC1/tf_static", self.on_tf_static, static_tf_qos
+                )
+            image_type = CompressedImage if args.compressed else Image
+            self.create_subscription(image_type, args.topic, self.on_image, qos)
+            info_topic = args.camera_info_topic
+            if info_topic is None:
+                if args.topic.endswith("/image/compressed"):
+                    info_topic = args.topic.removesuffix("/image/compressed") + "/camera_info"
+                else:
+                    info_topic = args.topic.rsplit("/", 1)[0] + "/camera_info"
             self.create_subscription(CameraInfo, info_topic, self.on_info, qos)
+            self.info_topic = info_topic
+
+        def on_tf(self, message):
+            for transform in message.transforms:
+                self.tf_buffer.set_transform(transform, "RMC1 namespaced tf")
+
+        def on_tf_static(self, message):
+            for transform in message.transforms:
+                self.tf_buffer.set_transform_static(
+                    transform, "RMC1 namespaced tf_static"
+                )
 
         def on_image(self, message):
             try:
-                frame = self.bridge.imgmsg_to_cv2(message, desired_encoding="bgr8")
+                if args.compressed:
+                    frame = self.bridge.compressed_imgmsg_to_cv2(
+                        message, desired_encoding="bgr8"
+                    )
+                else:
+                    frame = self.bridge.imgmsg_to_cv2(
+                        message, desired_encoding="bgr8"
+                    )
             except Exception as error:
                 self.get_logger().error(f"Ошибка кадра: {error}")
                 return
@@ -296,6 +394,7 @@ class Arm:
         quaternion_from_euler,
         event_log,
         plan_only=False,
+        base_frame="Base_link",
     ):
         self.robot = moveit(
             node_name="mvch_module3_moveit",
@@ -309,6 +408,7 @@ class Arm:
         self.quaternion_from_euler = quaternion_from_euler
         self.log = event_log
         self.plan_only = plan_only
+        self.base_frame = base_frame
 
     def execute(self, component, stage):
         plan = component.plan()
@@ -327,7 +427,7 @@ class Arm:
 
     def pose(self, x, y, z, yaw, stage):
         goal = self.PoseStamped()
-        goal.header.frame_id = "Base_link"
+        goal.header.frame_id = self.base_frame
         qx, qy, qz, qw = self.quaternion_from_euler(math.pi, 0.0, yaw)
         goal.pose.orientation.x = qx
         goal.pose.orientation.y = qy
@@ -529,9 +629,16 @@ def main():
         from rclpy.duration import Duration
         from rclpy.executors import SingleThreadedExecutor
         from rclpy.node import Node
-        from rclpy.qos import qos_profile_sensor_data
+        from rclpy.parameter import Parameter
+        from rclpy.qos import (
+            DurabilityPolicy,
+            QoSProfile,
+            ReliabilityPolicy,
+            qos_profile_sensor_data,
+        )
         from rclpy.time import Time
-        from sensor_msgs.msg import CameraInfo, Image
+        from sensor_msgs.msg import CameraInfo, CompressedImage, Image
+        from tf2_msgs.msg import TFMessage
         from tf2_ros import Buffer, TransformListener
         from tf_transformations import quaternion_from_euler
         from ultralytics import YOLO
@@ -554,12 +661,18 @@ def main():
         Node,
         CvBridge,
         Image,
+        CompressedImage,
         CameraInfo,
         qos_profile_sensor_data,
         Buffer,
         TransformListener,
         Duration,
         Time,
+        TFMessage,
+        Parameter,
+        QoSProfile,
+        ReliabilityPolicy,
+        DurabilityPolicy,
     )
     node = build_vision_node(args, imports)
     executor = SingleThreadedExecutor()
@@ -594,7 +707,7 @@ def main():
             .to_moveit_configs()
             .to_dict()
         )
-        moveit_config["use_sim_time"] = True
+        moveit_config["use_sim_time"] = args.sim
         # Wildcard нужен из-за namespace /RMC1/arm95: обычный config_dict
         # записывает параметры только для имени узла без namespace.
         with NamedTemporaryFile("w", suffix=".yaml", delete=False) as stream:
@@ -608,6 +721,7 @@ def main():
                 quaternion_from_euler,
                 event_log,
                 args.plan_only,
+                args.base_frame,
             )
             moveit_active = True
         finally:

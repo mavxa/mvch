@@ -24,6 +24,7 @@ const initialState: FmsState = {
   type: 'state',
   timestamp: 0,
   mode: 'ros',
+  fieldSize: 5,
   bridgeOnline: false,
   bridgeError: null,
   map: null,
@@ -89,10 +90,11 @@ function FieldMap({ state, selected }: { state: FmsState; selected: RobotId }) {
     return result.slice(0, 5000)
   }, [state.map])
 
-  const markers = Array.from({ length: 36 }, (_, id) => ({
+  const fieldSize = state.fieldSize || 5
+  const markers = Array.from({ length: fieldSize ** 2 }, (_, id) => ({
     id,
-    x: -Math.floor(id / 6),
-    y: id % 6,
+    x: -Math.floor(id / fieldSize),
+    y: id % fieldSize,
   }))
 
   return (
@@ -115,10 +117,10 @@ function FieldMap({ state, selected }: { state: FmsState; selected: RobotId }) {
           )
         })}
 
-        {Array.from({ length: 6 }, (_, row) => Array.from({ length: 6 }, (_, col) => {
+        {Array.from({ length: fieldSize }, (_, row) => Array.from({ length: fieldSize }, (_, col) => {
           const here = worldToSvg({ x: -row, y: col })
-          const right = col < 5 ? worldToSvg({ x: -row, y: col + 1 }) : null
-          const down = row < 5 ? worldToSvg({ x: -(row + 1), y: col }) : null
+          const right = col < fieldSize - 1 ? worldToSvg({ x: -row, y: col + 1 }) : null
+          const down = row < fieldSize - 1 ? worldToSvg({ x: -(row + 1), y: col }) : null
           return (
             <g key={`edges-${row}-${col}`} stroke="#1e3a5f" strokeWidth="2">
               {right && <line x1={here.x} y1={here.y} x2={right.x} y2={right.y} />}
@@ -165,7 +167,7 @@ function FieldMap({ state, selected }: { state: FmsState; selected: RobotId }) {
         })}
       </svg>
       <div className="absolute left-3 top-3 rounded-lg bg-slate-950/80 px-3 py-2 text-xs text-slate-300 backdrop-blur">
-        ArUco: шаг 1 м · X вниз · Y вправо
+        ArUco: поле {fieldSize}×{fieldSize} · шаг 1 м · X вниз · Y вправо
       </div>
       <div className="absolute bottom-3 right-3 flex gap-3 rounded-lg bg-slate-950/80 px-3 py-2 text-xs backdrop-blur">
         <span className="text-cyan-300">● RMC1</span><span className="text-amber-300">● RMC2</span><span className="text-violet-300">-- маршрут</span>
@@ -323,7 +325,7 @@ export default function App() {
             {(['RMC1', 'RMC2'] as RobotId[]).map((id) => (
               <button key={id} onClick={() => { setSelected(id); setPoseForm(state.robots[id].pose) }} className={`flex-1 rounded-xl border px-4 py-3 text-left ${selected === id ? 'border-cyan-500 bg-cyan-950/60' : 'border-slate-700 bg-slate-900'}`}>
                 <span className="font-bold">{id}</span>
-                <span className={`ml-3 text-xs ${state.robots[id].online ? 'text-emerald-400' : 'text-red-400'}`}>{state.robots[id].online ? '● ROS online' : '● нет данных'}</span>
+                <span className={`ml-3 text-xs ${state.robots[id].online ? 'text-emerald-400' : 'text-red-400'}`}>{state.robots[id].online ? 'ROS online' : 'нет данных'}</span>
               </button>
             ))}
           </div>
@@ -385,7 +387,7 @@ export default function App() {
             {selected === 'RMC1' ? (
               <div className="grid grid-cols-2 gap-2"><button disabled={rover.emergency} onClick={() => send({ type: 'gripper', robot: 'RMC1', state: 'open' })} className="rounded-lg bg-cyan-800 px-3 py-2 disabled:opacity-40">Открыть схват</button><button disabled={rover.emergency} onClick={() => send({ type: 'gripper', robot: 'RMC1', state: 'closed' })} className="rounded-lg bg-cyan-800 px-3 py-2 disabled:opacity-40">Закрыть схват</button></div>
             ) : (
-              <div className="grid grid-cols-2 gap-2"><button disabled={rover.emergency} onClick={() => send({ type: 'lift', robot: 'RMC2', height: 0.1 })} className="rounded-lg bg-amber-800 px-3 py-2 disabled:opacity-40">Поднять лифт</button><button disabled={rover.emergency} onClick={() => send({ type: 'lift', robot: 'RMC2', height: 0 })} className="rounded-lg bg-amber-800 px-3 py-2 disabled:opacity-40">Опустить лифт</button></div>
+              <div className="grid grid-cols-2 gap-2"><button disabled={rover.emergency} onClick={() => send({ type: 'lift', robot: 'RMC2', height: 0.05 })} className="rounded-lg bg-amber-800 px-3 py-2 disabled:opacity-40">Поднять лифт</button><button disabled={rover.emergency} onClick={() => send({ type: 'lift', robot: 'RMC2', height: 0 })} className="rounded-lg bg-amber-800 px-3 py-2 disabled:opacity-40">Опустить лифт</button></div>
             )}
           </Card>
         </aside>

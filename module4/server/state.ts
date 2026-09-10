@@ -22,6 +22,7 @@ export function initialState(mode: 'ros' | 'mock'): FmsState {
     type: 'state',
     timestamp: Date.now(),
     mode,
+    fieldSize: mode === 'mock' ? 6 : 5,
     bridgeOnline: mode === 'mock',
     bridgeError: null,
     map: mockMap,

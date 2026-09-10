@@ -33,7 +33,7 @@ def wrap_angle(value):
 
 
 def marker_xy(marker_id):
-    """Координаты поля: 0=(0,0), 6=(-1,0), 1=(0,1)."""
+    """Координаты поля: 0=(0,0), COLS=(-1,0), 1=(0,1)."""
     row, column = divmod(marker_id, COLS)
     return -row * MARKER_SPACING, column * MARKER_SPACING
 
@@ -128,7 +128,9 @@ class Scenario:
         }
         for name, marker in points.items():
             if marker not in range(ROWS * COLS):
-                raise ValueError(f"{name}: ID {marker} вне диапазона 0..35")
+                raise ValueError(
+                    f"{name}: ID {marker} вне диапазона 0..{ROWS * COLS - 1}"
+                )
         if self.assembly_approach not in neighbours(self.assembly):
             raise ValueError("assembly-approach должен быть соседней ячейкой")
         if self.delivery_approach not in neighbours(self.delivery):
@@ -185,16 +187,19 @@ class Anchor:
 
 
 def arguments():
+    global ROWS, COLS, MARKER_SPACING
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", help="1/hammer, 2/wrench, 3/pliers")
-    parser.add_argument("--rmc1-start", type=int, default=15)
-    parser.add_argument("--rmc2-start", type=int, default=0)
-    parser.add_argument("--rack", type=int, default=34)
-    parser.add_argument("--assembly", type=int, default=16)
-    parser.add_argument("--assembly-approach", type=int, default=10)
-    parser.add_argument("--delivery", type=int, default=5)
-    parser.add_argument("--delivery-approach", type=int, default=4)
-    parser.add_argument("--blocked", type=parse_markers, default={31, 35})
+    parser.add_argument("--real", action="store_true", help="Физическое поле 5x5 и реальные ROS-топики")
+    parser.add_argument("--spacing", type=float, default=1.0, help="Шаг ArUco-сетки, м")
+    parser.add_argument("--rmc1-start", type=int)
+    parser.add_argument("--rmc2-start", type=int)
+    parser.add_argument("--rack", type=int)
+    parser.add_argument("--assembly", type=int)
+    parser.add_argument("--assembly-approach", type=int)
+    parser.add_argument("--delivery", type=int)
+    parser.add_argument("--delivery-approach", type=int)
+    parser.add_argument("--blocked", type=parse_markers)
     parser.add_argument("--rmc1-start-yaw", type=float, default=math.pi)
     parser.add_argument("--rmc2-start-yaw", type=float, default=math.pi)
     parser.add_argument("--rack-yaw", type=float, default=math.pi)
@@ -202,9 +207,14 @@ def arguments():
     parser.add_argument("--dry-run", action="store_true", help="Показать сценарий без ROS")
     parser.add_argument("--skip-arm", action="store_true", help="Только роверы и лифт")
     parser.add_argument("--weights", default="module3/models/latest.pt")
-    parser.add_argument(
-        "--camera-topic", default="/RMC1/arm95/camera_gripper/image_color"
-    )
+    parser.add_argument("--camera-topic")
+    parser.add_argument("--camera-info-topic")
+    parser.add_argument("--camera-compressed", action="store_true")
+    parser.add_argument("--base-frame", default="Base_link")
+    parser.add_argument("--camera-fx", type=float)
+    parser.add_argument("--camera-fy", type=float)
+    parser.add_argument("--camera-cx", type=float)
+    parser.add_argument("--camera-cy", type=float)
     parser.add_argument("--conf", type=float, default=0.20)
     parser.add_argument("--vision-timeout", type=float, default=60.0)
     parser.add_argument("--plane-z", type=float, default=0.128)
@@ -217,10 +227,65 @@ def arguments():
     parser.add_argument("--sensor-timeout", type=float, default=3.0)
     parser.add_argument("--waypoint-timeout", type=float, default=35.0)
     args = parser.parse_args()
+    if args.spacing <= 0:
+        parser.error("--spacing должен быть больше нуля")
+
+    ROWS = COLS = 5 if args.real else 6
+    MARKER_SPACING = args.spacing
+    point_names = (
+        "rmc1_start",
+        "rmc2_start",
+        "rack",
+        "assembly",
+        "assembly_approach",
+        "delivery",
+        "delivery_approach",
+    )
+    if args.real:
+        missing = [
+            name.replace("_", "-")
+            for name in point_names
+            if getattr(args, name) is None
+        ]
+        if missing:
+            parser.error(
+                "Для --real эксперт должен сообщить все точки 0..24; не заданы: "
+                + ", ".join(missing)
+            )
+        if args.blocked is None:
+            args.blocked = set()
+    else:
+        simulator_defaults = {
+            "rmc1_start": 15,
+            "rmc2_start": 0,
+            "rack": 34,
+            "assembly": 16,
+            "assembly_approach": 10,
+            "delivery": 5,
+            "delivery_approach": 4,
+        }
+        for name, value in simulator_defaults.items():
+            if getattr(args, name) is None:
+                setattr(args, name, value)
+        if args.blocked is None:
+            args.blocked = {31, 35}
+    if args.camera_topic is None:
+        args.camera_topic = (
+            "/RMC1/arm95/svcam/right/image/compressed"
+            if args.real
+            else "/RMC1/arm95/camera_gripper/image_color"
+        )
     if not 0.0 <= args.conf <= 1.0:
         parser.error("--conf должен быть от 0 до 1")
     if args.approach_z <= max(args.pick_z, args.drop_arm_z):
         parser.error("--approach-z должен быть выше pick/drop")
+    intrinsics = (args.camera_fx, args.camera_fy, args.camera_cx, args.camera_cy)
+    if any(value is not None for value in intrinsics) and not all(
+        value is not None and math.isfinite(value) for value in intrinsics
+    ):
+        parser.error("--camera-fx/fy/cx/cy задаются только вместе")
+    if args.camera_fx is not None and (args.camera_fx <= 0 or args.camera_fy <= 0):
+        parser.error("--camera-fx и --camera-fy должны быть больше нуля")
     if min(args.sensor_timeout, args.waypoint_timeout, args.vision_timeout) <= 0:
         parser.error("таймауты должны быть положительными")
     return args
@@ -265,7 +330,12 @@ def build_ros_node(args, event_log):
     from nav_msgs.msg import Odometry
     from rclpy.executors import MultiThreadedExecutor
     from rclpy.node import Node
-    from rclpy.qos import qos_profile_sensor_data
+    from rclpy.qos import (
+        DurabilityPolicy,
+        QoSProfile,
+        ReliabilityPolicy,
+        qos_profile_sensor_data,
+    )
     from sensor_msgs.msg import LaserScan
     from std_msgs.msg import Bool, Float64, String
 
@@ -303,7 +373,14 @@ def build_ros_node(args, event_log):
                     lambda message, robot=name: self.on_scan(robot, message),
                     qos_profile_sensor_data,
                 )
-            self.create_subscription(String, "/RMC2/lift_status", self.on_lift, 10)
+            lift_qos = QoSProfile(
+                depth=1,
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            )
+            self.create_subscription(
+                String, "/RMC2/lift_status", self.on_lift, lift_qos
+            )
             self.create_subscription(Bool, "/mvch/module5/emergency_stop", self.on_stop, 10)
             self.create_subscription(String, "/mvch/module5/command", self.on_command, 10)
 
@@ -388,7 +465,8 @@ def build_ros_node(args, event_log):
                 time.sleep(0.04)
 
         def set_lift(self, raised, allow_already=False):
-            height = 0.1 if raised else 0.0
+            height = 0.05 if raised else 0.0
+            expected = "raised" if raised else "lowered"
             event_log.write("LIFT_COMMAND", state="up" if raised else "down", height=height)
             with self.lock:
                 updates_before = self.lift_updates
@@ -401,9 +479,10 @@ def build_ros_node(args, event_log):
                 with self.lock:
                     status = self.lift_status
                     received_update = self.lift_updates > updates_before
-                # Драйвер публикует status только при его изменении. Если лифт уже
-                # был внизу до нашей подписки, команда down не создаст сообщения.
-                if time.monotonic() - started >= 1.1 and received_update and "success" in status.lower():
+                # Реальный драйвер публикует lowered/moving/raised с
+                # Transient Local. Webots старых версий мог отвечать success.
+                normalized = status.strip().lower()
+                if normalized == expected or (received_update and "success" in normalized):
                     success = True
                     break
                 if time.monotonic() - started >= 1.3 and allow_already and not received_update:
@@ -573,9 +652,16 @@ class ArmWorkflow:
             from moveit_configs_utils import MoveItConfigsBuilder
             from rclpy.duration import Duration
             from rclpy.node import Node
-            from rclpy.qos import qos_profile_sensor_data
+            from rclpy.parameter import Parameter
+            from rclpy.qos import (
+                DurabilityPolicy,
+                QoSProfile,
+                ReliabilityPolicy,
+                qos_profile_sensor_data,
+            )
             from rclpy.time import Time
-            from sensor_msgs.msg import CameraInfo, Image
+            from sensor_msgs.msg import CameraInfo, CompressedImage, Image
+            from tf2_msgs.msg import TFMessage
             from tf2_ros import Buffer, TransformListener
             from tf_transformations import quaternion_from_euler
             from ultralytics import YOLO
@@ -615,14 +701,31 @@ class ArmWorkflow:
             Node,
             CvBridge,
             Image,
+            CompressedImage,
             CameraInfo,
             qos_profile_sensor_data,
             Buffer,
             TransformListener,
             Duration,
             Time,
+            TFMessage,
+            Parameter,
+            QoSProfile,
+            ReliabilityPolicy,
+            DurabilityPolicy,
         )
-        self.vision = build_vision_node(SimpleNamespace(topic=args.camera_topic), imports)
+        vision_args = SimpleNamespace(
+            topic=args.camera_topic,
+            camera_info_topic=args.camera_info_topic,
+            compressed=args.camera_compressed,
+            base_frame=args.base_frame,
+            sim=not args.real,
+            fx=args.camera_fx,
+            fy=args.camera_fy,
+            cx=args.camera_cx,
+            cy=args.camera_cy,
+        )
+        self.vision = build_vision_node(vision_args, imports)
         executor.add_node(self.vision)
         self.model = YOLO(str(weights))
         self.log.write("VISION_READY", target=target, weights=str(weights))
@@ -638,7 +741,7 @@ class ArmWorkflow:
             .to_moveit_configs()
             .to_dict()
         )
-        moveit_config["use_sim_time"] = True
+        moveit_config["use_sim_time"] = not args.real
         with NamedTemporaryFile("w", suffix=".yaml", delete=False) as stream:
             yaml.safe_dump({"/**": {"ros__parameters": moveit_config}}, stream)
             params_file = stream.name
@@ -649,6 +752,7 @@ class ArmWorkflow:
                 PoseStamped,
                 quaternion_from_euler,
                 event_log,
+                base_frame=args.base_frame,
             )
         finally:
             Path(params_file).unlink(missing_ok=True)

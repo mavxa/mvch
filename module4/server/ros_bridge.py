@@ -8,6 +8,7 @@ stderr: diagnostics
 
 import json
 import math
+import os
 import queue
 import sys
 import threading
@@ -81,6 +82,7 @@ class FmsBridge(Node):
             "type": "state",
             "timestamp": int(time.time() * 1000),
             "mode": "ros",
+            "fieldSize": max(2, min(10, int(os.environ.get("MVCH_FIELD_SIZE", "5")))),
             "bridgeOnline": True,
             "bridgeError": None,
             "map": None,
@@ -154,8 +156,20 @@ class FmsBridge(Node):
 
         self.create_subscription(OccupancyGrid, "/map", self.on_map, map_qos)
         self.create_subscription(OccupancyGrid, "/RMC1/map", self.on_map, map_qos)
+        # Первый топик физического RMC2, второй оставлен для Webots.
+        self.create_subscription(
+            String, "/RMC2/camera_bottom/aruco_id", self.on_aruco, sensor_qos
+        )
         self.create_subscription(String, "/RMC2/aruco_id", self.on_aruco, sensor_qos)
-        self.create_subscription(String, "/RMC2/lift_status", self.on_lift_status, 10)
+        lift_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+        self.create_subscription(
+            String, "/RMC2/lift_status", self.on_lift_status, lift_qos
+        )
         self.lift_publisher = self.create_publisher(Float64, "/RMC2/lift", 10)
         self.gripper_publisher = self.create_publisher(
             JointTrajectory,
@@ -335,7 +349,7 @@ class FmsBridge(Node):
                 self.state["robots"][robot]["goal"] = None
                 self.state["robots"][robot]["plan"] = []
         elif kind == "lift" and robot == "RMC2" and not emergency:
-            height = 0.1 if float(command.get("height", 0)) >= 0.05 else 0.0
+            height = 0.05 if float(command.get("height", 0)) >= 0.025 else 0.0
             self.lift_publisher.publish(Float64(data=height))
             with self.lock:
                 self.state["robots"][robot]["liftStatus"] = "command: up" if height else "command: down"

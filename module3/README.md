@@ -1,6 +1,8 @@
 # Модуль В: датасет и YOLO
 
-Камера: `/RMC1/arm95/camera_gripper/image_color` (`1600x1200`).
+Камера Webots: `/RMC1/arm95/camera_gripper/image_color`. На физическом RMC1 новая
+документация указывает `/RMC1/arm95/svcam/right/image/compressed` с типом
+`sensor_msgs/msg/Image` — несмотря на суффикс `compressed`.
 
 Основной зачетный скрипт: `module3.py`. Он показывает обработанный видеопоток,
 определяет координаты выбранной детали относительно `Base_link`, захватывает ее,
@@ -47,8 +49,39 @@ source .venv/bin/activate
 source /opt/ros/jazzy/setup.bash
 source ~/ros2_ws/install/setup.bash
 cd ~/scripts/mvch
-module3/.venv/bin/python module3/module3.py --target 1
+module3/.venv/bin/python module3/module3.py --target 1 --sim
 ```
+
+Для Webots `--sim` обязателен: он выбирает симуляторную камеру, глобальные TF и
+`use_sim_time`.
+
+На физическом RMC1 `--sim` не нужен. До запуска проверьте фактический тип камеры:
+
+```bash
+ros2 topic info /RMC1/arm95/svcam/right/image/compressed -v
+ros2 topic echo /RMC1/arm95/svcam/right/camera_info --once
+ros2 run tf2_ros tf2_echo Base_link ИМЯ_FRAME_КАМЕРЫ
+```
+
+Если `ros2 topic info` вопреки PDF показывает
+`sensor_msgs/msg/CompressedImage`, добавьте `--compressed`. Если `CameraInfo`
+публикуется под другим именем, задайте `--camera-info-topic`. При полном отсутствии
+`CameraInfo` можно передать калибровку камеры вручную:
+
+```bash
+module3/.venv/bin/python module3/module3.py --target hammer \
+  --fx FX --fy FY --cx CX --cy CY
+```
+
+Без CameraInfo либо четырёх параметров калибровки скрипт распознает класс, но
+намеренно не двигает ARM95: по одному bounding box нельзя получить метрические
+координаты детали.
+
+MoveIt-конфигурация в скрипте повторяет выданный
+`moveit_api_example.launch.py`: `arm95_webots.urdf`, группы `arm95_group` и
+`gripper`, namespace `/RMC1/arm95`. Для физического запуска меняется только
+`use_sim_time=false`. Если на площадке организаторы выдадут обновлённый launch или
+URDF для железа, он имеет приоритет — сначала сравните его с этим примером.
 
 Цели: `1/hammer`, `2/wrench`, `3/pliers`. После того как эксперт зафиксировал
 видеопоток, нажмите `G` или `Space` в окне либо введите `g` и
@@ -57,7 +90,7 @@ module3/.venv/bin/python module3/module3.py --target 1
 Сначала обязательно проверьте только координаты:
 
 ```bash
-module3/.venv/bin/python module3/module3.py --target hammer --dry-run
+module3/.venv/bin/python module3/module3.py --target hammer --sim --dry-run
 ```
 
 В режиме `--dry-run` подтверждать запуск клавишей не нужно: скрипт завершится
@@ -66,7 +99,7 @@ module3/.venv/bin/python module3/module3.py --target hammer --dry-run
 Для проверки через SSH без окна:
 
 ```bash
-module3/.venv/bin/python module3/module3.py --target hammer --dry-run --no-window
+module3/.venv/bin/python module3/module3.py --target hammer --sim --dry-run --no-window
 ```
 
 Геометрию реального стенда нельзя брать из симулятора вслепую. Перед зачетом
@@ -110,8 +143,11 @@ wrench
 ```bash
 source /opt/ros/jazzy/setup.bash
 source ~/ros2_ws/install/setup.bash
-python3 module3/capture_dataset.py --count 30
+python3 module3/capture_dataset.py --sim --count 30
 ```
+
+На реальном RMC1 `capture_dataset.py` по умолчанию использует новую камеру. Если
+её реальный тип окажется `CompressedImage`, добавьте `--compressed`.
 
 Во время сбора плавно меняйте положение RMC1/манипулятора. Скрипт пропускает почти
 одинаковые кадры. Для одиночного снимка используйте `--count 1 --min-change 0`.

@@ -12,11 +12,12 @@ HERE = Path(__file__).resolve().parent
 
 def arguments():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--sim", action="store_true", help="Использовать камеру Webots")
     parser.add_argument(
         "--topic",
-        default="/RMC1/arm95/camera_gripper/image_color",
-        help="ROS-топик sensor_msgs/Image",
+        help="ROS-топик камеры; по умолчанию выбирается по --sim",
     )
+    parser.add_argument("--compressed", action="store_true", help="Тип CompressedImage")
     parser.add_argument("--output", default="dataset/raw", help="Каталог для JPG")
     parser.add_argument("--count", type=int, default=30, help="Сколько кадров сохранить")
     parser.add_argument("--interval", type=float, default=0.5, help="Минимум секунд между JPG")
@@ -29,6 +30,12 @@ def arguments():
     parser.add_argument("--timeout", type=float, default=180.0, help="Общий таймаут")
     parser.add_argument("--jpeg-quality", type=int, default=95)
     args = parser.parse_args()
+    if args.topic is None:
+        args.topic = (
+            "/RMC1/arm95/camera_gripper/image_color"
+            if args.sim
+            else "/RMC1/arm95/svcam/right/image/compressed"
+        )
     if args.count < 1 or args.interval < 0 or args.timeout <= 0:
         parser.error("count >= 1, interval >= 0, timeout > 0")
     if not 1 <= args.jpeg_quality <= 100 or args.min_change < 0:
@@ -45,7 +52,7 @@ def main():
         from cv_bridge import CvBridge
         from rclpy.node import Node
         from rclpy.qos import qos_profile_sensor_data
-        from sensor_msgs.msg import Image
+        from sensor_msgs.msg import CompressedImage, Image
     except ImportError as error:
         raise SystemExit(
             f"Нет ROS/OpenCV зависимости: {error}. Запускайте после source ROS 2 в VM."
@@ -63,14 +70,22 @@ def main():
             self.saved = 0
             self.previous = None
             self.last_save = 0.0
-            self.create_subscription(Image, args.topic, self.on_image, qos_profile_sensor_data)
+            image_type = CompressedImage if args.compressed else Image
+            self.create_subscription(image_type, args.topic, self.on_image, qos_profile_sensor_data)
 
         def on_image(self, message):
             now = time.monotonic()
             if now - self.last_save < args.interval:
                 return
             try:
-                frame = self.bridge.imgmsg_to_cv2(message, desired_encoding="bgr8")
+                if args.compressed:
+                    frame = self.bridge.compressed_imgmsg_to_cv2(
+                        message, desired_encoding="bgr8"
+                    )
+                else:
+                    frame = self.bridge.imgmsg_to_cv2(
+                        message, desired_encoding="bgr8"
+                    )
             except Exception as error:
                 self.get_logger().error(f"Не удалось преобразовать кадр: {error}")
                 return

@@ -33,7 +33,7 @@ export function isCommand(value: unknown): value is Command {
     case 'set_goal':
       return isPose(command.pose)
     case 'lift':
-      return command.robot === 'RMC2' && (command.height === 0 || command.height === 0.1)
+      return command.robot === 'RMC2' && (command.height === 0 || command.height === 0.05)
     case 'gripper':
       return command.robot === 'RMC1' && (command.state === 'open' || command.state === 'closed')
     default:

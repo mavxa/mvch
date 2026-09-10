@@ -31,6 +31,7 @@ export type FmsState = {
   type: 'state'
   timestamp: number
   mode: 'ros' | 'mock'
+  fieldSize: number
   bridgeOnline: boolean
   bridgeError: string | null
   map: MapState | null
@@ -44,5 +45,5 @@ export type Command =
   | { type: 'set_pose'; robot: RobotId; pose: Pose }
   | { type: 'set_goal'; robot: RobotId; pose: Pose }
   | { type: 'cancel_goal'; robot: RobotId }
-  | { type: 'lift'; robot: 'RMC2'; height: 0 | 0.1 }
+  | { type: 'lift'; robot: 'RMC2'; height: 0 | 0.05 }
   | { type: 'gripper'; robot: 'RMC1'; state: 'open' | 'closed' }
