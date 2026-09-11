@@ -48,7 +48,7 @@ function format(value: number | null, digits = 2): string {
 
 function Card({ title, children, className = '' }: { title: string; children: React.ReactNode; className?: string }) {
   return (
-    <section className={`rounded-xl border border-slate-700 bg-slate-900/80 p-4 ${className}`}>
+    <section className={` border border-slate-700 bg-slate-900/80 p-4 ${className}`}>
       <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">{title}</h2>
       {children}
     </section>
@@ -60,7 +60,7 @@ function NumberField({ label, value, onChange }: { label: string; value: number;
     <label className="grid gap-1 text-xs text-slate-400">
       {label}
       <input
-        className="w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500"
+        className="w-full  border border-slate-700 bg-slate-950 px-2 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500"
         type="number"
         step="0.1"
         value={value}
@@ -98,9 +98,9 @@ function FieldMap({ state, selected }: { state: FmsState; selected: RobotId }) {
   }))
 
   return (
-    <div className="relative aspect-square min-h-[420px] overflow-hidden rounded-xl border border-slate-700 bg-slate-950">
+    <div className="relative aspect-square min-h-105 overflow-hidden  border border-slate-700 bg-gray-500">
       <svg viewBox={`0 0 ${SVG_SIZE} ${SVG_SIZE}`} className="h-full w-full" aria-label="Карта поля и телеметрия роверов">
-        <rect width={SVG_SIZE} height={SVG_SIZE} fill="#020617" />
+        <rect width={SVG_SIZE} height={SVG_SIZE} />
         {occupied.map((cell, index) => {
           const topLeft = worldToSvg({ x: cell.x, y: cell.y })
           const bottomRight = worldToSvg({ x: cell.x + cell.size, y: cell.y + cell.size })
@@ -166,11 +166,11 @@ function FieldMap({ state, selected }: { state: FmsState; selected: RobotId }) {
           )
         })}
       </svg>
-      <div className="absolute left-3 top-3 rounded-lg bg-slate-950/80 px-3 py-2 text-xs text-slate-300 backdrop-blur">
-        ArUco: поле {fieldSize}×{fieldSize} · шаг 1 м · X вниз · Y вправо
+      <div className="absolute left-3 top-3 px-3 py-2 text-xs text-slate-300 backdrop-blur">
+        ArUco: поле {fieldSize}×{fieldSize} - шаг 1 м - X вниз - Y вправо
       </div>
-      <div className="absolute bottom-3 right-3 flex gap-3 rounded-lg bg-slate-950/80 px-3 py-2 text-xs backdrop-blur">
-        <span className="text-cyan-300">● RMC1</span><span className="text-amber-300">● RMC2</span><span className="text-violet-300">-- маршрут</span>
+      <div className="absolute bottom-3 right-3 flex gap-3  bg-slate-950/80 px-3 py-2 text-xs backdrop-blur">
+        <span className="text-cyan-300">RMC1</span><span className="text-amber-300">RMC2</span><span className="text-violet-300"> - - - маршрут</span>
       </div>
     </div>
   )
@@ -195,7 +195,7 @@ function ManualControls({ robot, emergency, send }: { robot: RobotId; emergency:
 
   useEffect(() => stop, [stop])
 
-  const button = 'select-none rounded-lg border border-slate-600 bg-slate-800 px-3 py-3 font-semibold text-slate-100 hover:bg-slate-700 active:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-40'
+  const button = 'select-none  border border-slate-600 bg-slate-800 px-3 py-3 font-semibold text-slate-100 hover:bg-slate-700 active:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-40'
   const handlers = (x: number, y: number, yaw: number) => ({
     onPointerDown: (event: React.PointerEvent<HTMLButtonElement>) => {
       event.currentTarget.setPointerCapture(event.pointerId)
@@ -207,15 +207,15 @@ function ManualControls({ robot, emergency, send }: { robot: RobotId; emergency:
 
   return (
     <div className="grid grid-cols-3 gap-2">
-      <button className={button} disabled={robot === 'RMC2' || emergency} {...handlers(0, 0.35, 0)}>↖ бок</button>
-      <button className={button} disabled={emergency} {...handlers(0.45, 0, 0)}>↑ W</button>
-      <button className={button} disabled={robot === 'RMC2' || emergency} {...handlers(0, -0.35, 0)}>бок ↗</button>
-      <button className={button} disabled={emergency} {...handlers(0, 0, 0.75)}>↶ A</button>
+      <button className={button} disabled={robot === 'RMC2' || emergency} {...handlers(0, 0.35, 0)}>бок</button>
+      <button className={button} disabled={emergency} {...handlers(0.45, 0, 0)}>W</button>
+      <button className={button} disabled={robot === 'RMC2' || emergency} {...handlers(0, -0.35, 0)}>бок</button>
+      <button className={button} disabled={emergency} {...handlers(0, 0, 0.75)}>A</button>
       <button className={`${button} border-red-700 bg-red-950 text-red-200`} onClick={stop}>STOP</button>
-      <button className={button} disabled={emergency} {...handlers(0, 0, -0.75)}>D ↷</button>
-      <button className={button} disabled={robot === 'RMC2' || emergency} {...handlers(0, -0.35, 0)}>↙ бок</button>
-      <button className={button} disabled={emergency} {...handlers(-0.45, 0, 0)}>↓ S</button>
-      <button className={button} disabled={robot === 'RMC2' || emergency} {...handlers(0, 0.35, 0)}>бок ↘</button>
+      <button className={button} disabled={emergency} {...handlers(0, 0, -0.75)}>D</button>
+      <button className={button} disabled={robot === 'RMC2' || emergency} {...handlers(0, -0.35, 0)}>бок</button>
+      <button className={button} disabled={emergency} {...handlers(-0.45, 0, 0)}>S</button>
+      <button className={button} disabled={robot === 'RMC2' || emergency} {...handlers(0, 0.35, 0)}>бок</button>
     </div>
   )
 }
@@ -309,13 +309,13 @@ export default function App() {
   const setForm = (setter: React.Dispatch<React.SetStateAction<Pose>>, key: keyof Pose, value: number) => setter((current) => ({ ...current, [key]: value }))
 
   return (
-    <main className="min-h-screen bg-slate-950 p-3 text-slate-100 lg:p-5">
+    <main className="min-h-screen bg-indigo-950 p-3 text-slate-100 lg:p-5">
       <header className="mx-auto mb-4 flex max-w-[1600px] flex-wrap items-center justify-between gap-3">
-        <div><h1 className="text-xl font-bold">MVCH FMS · модуль Г</h1><p className="text-sm text-slate-400">Управление, навигация и телеметрия RMC1 / RMC2</p></div>
+        <div><h1 className="text-xl font-bold">Веб-Панель - модуль Г</h1><p className="text-sm text-slate-400">Управление, навигация и телеметрия RMC1 / RMC2</p></div>
         <div className="flex flex-wrap items-center gap-2 text-xs">
-          <span className={`rounded-full px-3 py-1.5 ${socketOnline && fresh ? 'bg-emerald-950 text-emerald-300' : 'bg-red-950 text-red-300'}`}>WebSocket: {socketOnline && fresh ? 'online' : 'offline'}</span>
-          <span className={`rounded-full px-3 py-1.5 ${state.bridgeOnline ? 'bg-emerald-950 text-emerald-300' : 'bg-amber-950 text-amber-300'}`}>Bridge: {state.bridgeOnline ? state.mode : 'offline'}</span>
-          <span className="max-w-sm truncate rounded-full bg-slate-800 px-3 py-1.5 text-slate-300">{state.bridgeError ?? message}</span>
+          <span className={`px-3 py-1.5 ${socketOnline && fresh ? 'bg-emerald-950 text-emerald-300' : 'bg-red-950'}`}>WebSocket: {socketOnline && fresh ? 'online' : 'offline'}</span>
+          <span className={`px-3 py-1.5 ${state.bridgeOnline ? 'bg-emerald-950 text-emerald-300' : 'bg-amber-950'}`}>Bridge: {state.bridgeOnline ? state.mode : 'offline'}</span>
+          <span className="max-w-sm truncate bg-slate-800 px-3 py-1.5 text-slate-300">{state.bridgeError ?? message}</span>
         </div>
       </header>
 
@@ -323,7 +323,7 @@ export default function App() {
         <div className="grid gap-4">
           <div className="flex gap-2">
             {(['RMC1', 'RMC2'] as RobotId[]).map((id) => (
-              <button key={id} onClick={() => { setSelected(id); setPoseForm(state.robots[id].pose) }} className={`flex-1 rounded-xl border px-4 py-3 text-left ${selected === id ? 'border-cyan-500 bg-cyan-950/60' : 'border-slate-700 bg-slate-900'}`}>
+              <button key={id} onClick={() => { setSelected(id); setPoseForm(state.robots[id].pose) }} className={`cursor-pointer flex-1 border px-4 py-3 text-left ${selected === id ? 'border-violet-500' : 'border-slate-700 bg-slate-900'}`}>
                 <span className="font-bold">{id}</span>
                 <span className={`ml-3 text-xs ${state.robots[id].online ? 'text-emerald-400' : 'text-red-400'}`}>{state.robots[id].online ? 'ROS online' : 'нет данных'}</span>
               </button>
@@ -332,9 +332,9 @@ export default function App() {
           <FieldMap state={state} selected={selected} />
           <Card title="Состояние двух роверов">
             <div className="grid grid-cols-2 gap-3 text-sm lg:grid-cols-4">
-              {(['RMC1', 'RMC2'] as RobotId[]).map((id) => <div key={id} className="rounded-lg bg-slate-950 p-3"><strong>{id}</strong><div className="mt-1 text-slate-400">x {format(state.robots[id].pose.x)} · y {format(state.robots[id].pose.y)}</div><div className="text-slate-400">yaw {format(state.robots[id].pose.yaw)} rad</div></div>)}
-              <div className="rounded-lg bg-slate-950 p-3"><strong>Карта</strong><div className="mt-1 text-slate-400">{state.map ? `${state.map.width} × ${state.map.height}` : 'нет /map'}</div></div>
-              <div className="rounded-lg bg-slate-950 p-3"><strong>Обновление</strong><div className="mt-1 text-slate-400">{state.timestamp ? new Date(state.timestamp).toLocaleTimeString() : '—'}</div></div>
+              {(['RMC1', 'RMC2'] as RobotId[]).map((id) => <div key={id} className=" bg-slate-950 p-3"><strong>{id}</strong><div className="mt-1 text-slate-400">x {format(state.robots[id].pose.x)} · y {format(state.robots[id].pose.y)}</div><div className="text-slate-400">yaw {format(state.robots[id].pose.yaw)} rad</div></div>)}
+              <div className=" bg-slate-950 p-3"><strong>Карта</strong><div className="mt-1 text-slate-400">{state.map ? `${state.map.width} × ${state.map.height}` : 'нет /map'}</div></div>
+              <div className=" bg-slate-950 p-3"><strong>Обновление</strong><div className="mt-1 text-slate-400">{state.timestamp ? new Date(state.timestamp).toLocaleTimeString() : '—'}</div></div>
             </div>
           </Card>
         </div>
@@ -342,10 +342,10 @@ export default function App() {
         <aside className="grid content-start gap-4">
           <Card title={`Ручное управление ${selected}`}>
             <ManualControls robot={selected} emergency={rover.emergency} send={send} />
-            <p className="mt-2 text-xs text-slate-500">Клавиши: W/S — ход, A/D — поворот, Q/E — боковой ход RMC1. При отпускании отправляется STOP.</p>
+            <p className="mt-2 text-xs text-slate-500">Клавиши: W/S - ход, A/D - поворот, Q/E - боковой ход RMC1. При отпускании отправляется STOP.</p>
           </Card>
 
-          <button onClick={() => send({ type: 'emergency', robot: selected, active: !rover.emergency })} className={`rounded-xl border-2 px-5 py-5 text-lg font-black tracking-wide ${rover.emergency ? 'border-emerald-500 bg-emerald-950 text-emerald-300' : 'border-red-500 bg-red-950 text-red-200'}`}>
+          <button onClick={() => send({ type: 'emergency', robot: selected, active: !rover.emergency })} className={`border px-5 py-5 text-lg font-black tracking-wide ${rover.emergency ? 'border-emerald-500 text-emerald-300' : 'border-red-500 bg-red-950 text-red-200'}`}>
             {rover.emergency ? 'СНЯТЬ АВАРИЙНЫЙ СТОП' : 'АВАРИЙНЫЙ СТОП'}
           </button>
 
@@ -368,7 +368,7 @@ export default function App() {
               <NumberField label="Y, м" value={poseForm.y} onChange={(value) => setForm(setPoseForm, 'y', value)} />
               <NumberField label="Yaw, рад" value={poseForm.yaw} onChange={(value) => setForm(setPoseForm, 'yaw', value)} />
             </div>
-            <button onClick={() => send({ type: 'set_pose', robot: selected, pose: poseForm })} className="mt-3 w-full rounded-lg bg-slate-700 px-4 py-2 font-semibold hover:bg-slate-600">Применить без движения</button>
+            <button onClick={() => send({ type: 'set_pose', robot: selected, pose: poseForm })} className="mt-3 w-full  bg-slate-700 px-4 py-2 font-semibold hover:bg-slate-600">Применить без движения</button>
           </Card>
 
           <Card title="Автономная цель Nav2">
@@ -378,16 +378,16 @@ export default function App() {
               <NumberField label="Yaw, рад" value={goalForm.yaw} onChange={(value) => setForm(setGoalForm, 'yaw', value)} />
             </div>
             <div className="mt-3 grid grid-cols-2 gap-2">
-              <button disabled={rover.emergency} onClick={() => send({ type: 'set_goal', robot: selected, pose: goalForm })} className="rounded-lg bg-violet-700 px-3 py-2 font-semibold hover:bg-violet-600 disabled:opacity-40">Ехать к точке</button>
-              <button onClick={() => send({ type: 'cancel_goal', robot: selected })} className="rounded-lg bg-slate-700 px-3 py-2 font-semibold hover:bg-slate-600">Отменить</button>
+              <button disabled={rover.emergency} onClick={() => send({ type: 'set_goal', robot: selected, pose: goalForm })} className=" bg-violet-700 px-3 py-2 font-semibold hover:bg-violet-600 disabled:opacity-40">Ехать к точке</button>
+              <button onClick={() => send({ type: 'cancel_goal', robot: selected })} className=" bg-slate-700 px-3 py-2 font-semibold hover:bg-slate-600">Отменить</button>
             </div>
           </Card>
 
           <Card title="Рабочий инструмент">
             {selected === 'RMC1' ? (
-              <div className="grid grid-cols-2 gap-2"><button disabled={rover.emergency} onClick={() => send({ type: 'gripper', robot: 'RMC1', state: 'open' })} className="rounded-lg bg-cyan-800 px-3 py-2 disabled:opacity-40">Открыть схват</button><button disabled={rover.emergency} onClick={() => send({ type: 'gripper', robot: 'RMC1', state: 'closed' })} className="rounded-lg bg-cyan-800 px-3 py-2 disabled:opacity-40">Закрыть схват</button></div>
+              <div className="grid grid-cols-2 gap-2"><button disabled={rover.emergency} onClick={() => send({ type: 'gripper', robot: 'RMC1', state: 'open' })} className=" bg-cyan-800 px-3 py-2 disabled:opacity-40">Открыть схват</button><button disabled={rover.emergency} onClick={() => send({ type: 'gripper', robot: 'RMC1', state: 'closed' })} className=" bg-cyan-800 px-3 py-2 disabled:opacity-40">Закрыть схват</button></div>
             ) : (
-              <div className="grid grid-cols-2 gap-2"><button disabled={rover.emergency} onClick={() => send({ type: 'lift', robot: 'RMC2', height: 0.1 })} className="rounded-lg bg-amber-800 px-3 py-2 disabled:opacity-40">Поднять лифт</button><button disabled={rover.emergency} onClick={() => send({ type: 'lift', robot: 'RMC2', height: 0 })} className="rounded-lg bg-amber-800 px-3 py-2 disabled:opacity-40">Опустить лифт</button></div>
+              <div className="grid grid-cols-2 gap-2"><button disabled={rover.emergency} onClick={() => send({ type: 'lift', robot: 'RMC2', height: 0.1 })} className=" bg-amber-800 px-3 py-2 disabled:opacity-40">Поднять лифт</button><button disabled={rover.emergency} onClick={() => send({ type: 'lift', robot: 'RMC2', height: 0 })} className=" bg-amber-800 px-3 py-2 disabled:opacity-40">Опустить лифт</button></div>
             )}
           </Card>
         </aside>
