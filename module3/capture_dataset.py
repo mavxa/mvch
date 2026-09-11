@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Сохраняет непохожие кадры с камеры захвата RMC1 для разметки."""
-
 import argparse
 import time
 from datetime import datetime
@@ -11,7 +9,7 @@ HERE = Path(__file__).resolve().parent
 
 
 def arguments():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser()
     parser.add_argument("--sim", action="store_true", help="Использовать камеру Webots")
     parser.add_argument(
         "--topic",

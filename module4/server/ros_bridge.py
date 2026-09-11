@@ -1,11 +1,4 @@
 #!/usr/bin/env python3
-"""Small JSON <-> ROS 2 bridge for the module G web interface.
-
-stdin: one JSON command per line
-stdout: one JSON state per line (only machine-readable data)
-stderr: diagnostics
-"""
-
 import json
 import math
 import os
@@ -35,6 +28,9 @@ except ImportError:
 
 ROBOTS = ("RMC1", "RMC2")
 MANUAL_TIMEOUT = 0.35
+LIFT_UP_HEIGHT = float(os.environ.get("MVCH_LIFT_UP_HEIGHT", "0.1"))
+if LIFT_UP_HEIGHT not in (0.05, 0.1):
+    raise SystemExit("MVCH_LIFT_UP_HEIGHT должен быть 0.05 или 0.1")
 
 
 def empty_robot():
@@ -163,7 +159,11 @@ class FmsBridge(Node):
         self.create_subscription(String, "/RMC2/aruco_id", self.on_aruco, sensor_qos)
         lift_qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            durability=(
+                DurabilityPolicy.TRANSIENT_LOCAL
+                if LIFT_UP_HEIGHT == 0.05
+                else DurabilityPolicy.VOLATILE
+            ),
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
         )
@@ -349,7 +349,7 @@ class FmsBridge(Node):
                 self.state["robots"][robot]["goal"] = None
                 self.state["robots"][robot]["plan"] = []
         elif kind == "lift" and robot == "RMC2" and not emergency:
-            height = 0.05 if float(command.get("height", 0)) >= 0.025 else 0.0
+            height = LIFT_UP_HEIGHT if float(command.get("height", 0)) > 0 else 0.0
             self.lift_publisher.publish(Float64(data=height))
             with self.lock:
                 self.state["robots"][robot]["liftStatus"] = "command: up" if height else "command: down"

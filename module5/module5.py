@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Модуль Д: один скрипт для складского кейса RMC1 + RMC2."""
-
 import argparse
 import json
 import math
@@ -188,7 +186,7 @@ class Anchor:
 
 def arguments():
     global ROWS, COLS, MARKER_SPACING
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser()
     parser.add_argument("--target", help="1/hammer, 2/wrench, 3/pliers")
     parser.add_argument("--real", action="store_true", help="Физическое поле 5x5 и реальные ROS-топики")
     parser.add_argument("--spacing", type=float, default=1.0, help="Шаг ArUco-сетки, м")
@@ -225,7 +223,7 @@ def arguments():
     parser.add_argument("--drop-arm-z", type=float, default=0.220)
     parser.add_argument("--drop-arm-yaw", type=float, default=math.pi / 2)
     parser.add_argument("--sensor-timeout", type=float, default=3.0)
-    parser.add_argument("--waypoint-timeout", type=float, default=35.0)
+    parser.add_argument("--waypoint-timeout", type=float, default=120.0)
     args = parser.parse_args()
     if args.spacing <= 0:
         parser.error("--spacing должен быть больше нуля")
@@ -336,11 +334,12 @@ def build_ros_node(args, event_log):
         ReliabilityPolicy,
         qos_profile_sensor_data,
     )
+    from rclpy.signals import SignalHandlerOptions
     from sensor_msgs.msg import LaserScan
     from std_msgs.msg import Bool, Float64, String
 
     if not rclpy.ok():
-        rclpy.init()
+        rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
 
     class WarehouseNode(Node):
         def __init__(self):
@@ -376,7 +375,11 @@ def build_ros_node(args, event_log):
             lift_qos = QoSProfile(
                 depth=1,
                 reliability=ReliabilityPolicy.RELIABLE,
-                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                durability=(
+                    DurabilityPolicy.TRANSIENT_LOCAL
+                    if args.real
+                    else DurabilityPolicy.VOLATILE
+                ),
             )
             self.create_subscription(
                 String, "/RMC2/lift_status", self.on_lift, lift_qos
@@ -465,7 +468,7 @@ def build_ros_node(args, event_log):
                 time.sleep(0.04)
 
         def set_lift(self, raised, allow_already=False):
-            height = 0.05 if raised else 0.0
+            height = (0.05 if args.real else 0.1) if raised else 0.0
             expected = "raised" if raised else "lowered"
             event_log.write("LIFT_COMMAND", state="up" if raised else "down", height=height)
             with self.lock:
@@ -475,7 +478,7 @@ def build_ros_node(args, event_log):
                 time.sleep(0.1)
             started = time.monotonic()
             success = False
-            while time.monotonic() - started < 6.0:
+            while time.monotonic() - started < 20.0:
                 with self.lock:
                     status = self.lift_status
                     received_update = self.lift_updates > updates_before
@@ -556,10 +559,19 @@ class Motion:
                 carrying=carrying,
                 allow_rack_entry=(rack_entry and index == len(route) - 1)
                 or (rack_exit and index == 1),
+                precise=rack_entry and index == len(route) - 2,
             )
         self.log.write("ROUTE_DONE", robot=robot, stage=name, marker=route[-1])
 
-    def drive_to(self, robot, marker, target, carrying=False, allow_rack_entry=False):
+    def drive_to(
+        self,
+        robot,
+        marker,
+        target,
+        carrying=False,
+        allow_rack_entry=False,
+        precise=False,
+    ):
         started = time.monotonic()
         obstacle_since = None
         while time.monotonic() - started < self.args.waypoint_timeout:
@@ -595,8 +607,10 @@ class Motion:
             obstacle_since = None
 
             yaw_error = wrap_angle(target_yaw - yaw)
-            if distance < 0.09:
-                if abs(yaw_error) < 0.10:
+            position_tolerance = 0.03 if precise else 0.09
+            yaw_tolerance = 0.04 if precise else 0.10
+            if distance < position_tolerance:
+                if abs(yaw_error) < yaw_tolerance:
                     self.node.command(robot, immediate=True)
                     self.log.write(
                         "WAYPOINT", robot=robot, marker=marker, error=round(distance, 3)
@@ -625,6 +639,8 @@ class Motion:
                     )
                 else:
                     maximum = 0.18 if carrying else 0.27
+                    if allow_rack_entry:
+                        maximum = min(maximum, 0.10)
                     self.node.command(
                         robot,
                         x=min(maximum, max(0.07, distance * 0.55)),

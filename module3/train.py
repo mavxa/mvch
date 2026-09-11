@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Обучение YOLO11 на размеченном датасете инструментов."""
-
 import argparse
 import shutil
 from pathlib import Path
@@ -32,7 +30,7 @@ def select_device(requested, torch):
 
 
 def arguments():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser()
     parser.add_argument("--data", default="training/data.yaml", help="data.yaml из Roboflow")
     parser.add_argument("--model", default="yolo11n.pt", help="Стартовые веса Ultralytics")
     parser.add_argument("--epochs", type=int, default=30)

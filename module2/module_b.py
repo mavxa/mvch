@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""Модуль Б: один запуск, маршрут туда, пауза эксперта, маршрут обратно.
-
-python3 module_b.py --target 14 --sim
-Команды в терминале: Enter / go, stop, resume, return, quit.
-"""
-
 import argparse
 import heapq
 import json
@@ -138,11 +132,16 @@ class Field:
 
 
 def arguments():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser()
     target = parser.add_mutually_exclusive_group(required=True)
     target.add_argument("--target", type=int, help="ID целевой метки")
     target.add_argument("--xy", nargs=2, type=float, help="Координаты цели на карте, метры")
     parser.add_argument("--sim", action="store_true", help="Часы Webots /clock")
+    parser.add_argument("--rows", type=int, help="Число строк ArUco-сетки")
+    parser.add_argument("--columns", type=int, help="Число столбцов ArUco-сетки")
+    parser.add_argument("--spacing", type=float, help="Шаг между ArUco, м")
+    parser.add_argument("--base-frame", help="TF-фрейм корпуса RMC2")
+    parser.add_argument("--odom-frame", help="TF-фрейм одометрии RMC2")
     parser.add_argument("--target-yaw", type=float, help="Ориентация на цели в системе поля, рад")
     parser.add_argument("--auto", action="store_true", help="Только тренировка: без команд эксперта")
     parser.add_argument("--return-delay", type=float, default=5.0, help="Пауза --auto, секунд симуляции")
@@ -157,12 +156,21 @@ def arguments():
         parser.error("--target-yaw должен быть конечным числом")
     if args.xy and not all(math.isfinite(v) for v in args.xy):
         parser.error("--xy должен содержать конечные числа")
+    if args.rows is not None and args.rows < 1:
+        parser.error("--rows должен быть больше нуля")
+    if args.columns is not None and args.columns < 1:
+        parser.error("--columns должен быть больше нуля")
+    if args.spacing is not None and (args.spacing <= 0 or not math.isfinite(args.spacing)):
+        parser.error("--spacing должен быть конечным положительным числом")
     return args
 
 
 def main():
     args = arguments()
-    rows, columns, spacing = SIM_FIELD if args.sim else REAL_FIELD
+    default_rows, default_columns, default_spacing = SIM_FIELD if args.sim else REAL_FIELD
+    rows = args.rows if args.rows is not None else default_rows
+    columns = args.columns if args.columns is not None else default_columns
+    spacing = args.spacing if args.spacing is not None else default_spacing
     half_size = SIM_HALF_SIZE if args.sim else REAL_HALF_SIZE
     field = Field(rows, columns, spacing, half_size+SAFETY_MARGIN)
     target = args.target if args.target is not None else field.nearest(*args.xy)
@@ -218,7 +226,8 @@ def main():
                 "safety_margin": SAFETY_MARGIN,
             }
             ns = ROBOT_NAMESPACE.strip("/")
-            self.base, self.odom_frame = f"{ns}/base_link", f"{ns}/odom"
+            self.base = args.base_frame or f"{ns}/base_link"
+            self.odom_frame = args.odom_frame or f"{ns}/odom"
             self.buffer = Buffer()
             self.listener = TransformListener(self.buffer, self)
             if not args.sim:

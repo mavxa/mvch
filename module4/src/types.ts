@@ -45,5 +45,5 @@ export type Command =
   | { type: 'set_pose'; robot: RobotId; pose: Pose }
   | { type: 'set_goal'; robot: RobotId; pose: Pose }
   | { type: 'cancel_goal'; robot: RobotId }
-  | { type: 'lift'; robot: 'RMC2'; height: 0 | 0.05 }
+  | { type: 'lift'; robot: 'RMC2'; height: 0 | 0.05 | 0.1 }
   | { type: 'gripper'; robot: 'RMC1'; state: 'open' | 'closed' }

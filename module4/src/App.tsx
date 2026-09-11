@@ -387,7 +387,7 @@ export default function App() {
             {selected === 'RMC1' ? (
               <div className="grid grid-cols-2 gap-2"><button disabled={rover.emergency} onClick={() => send({ type: 'gripper', robot: 'RMC1', state: 'open' })} className="rounded-lg bg-cyan-800 px-3 py-2 disabled:opacity-40">Открыть схват</button><button disabled={rover.emergency} onClick={() => send({ type: 'gripper', robot: 'RMC1', state: 'closed' })} className="rounded-lg bg-cyan-800 px-3 py-2 disabled:opacity-40">Закрыть схват</button></div>
             ) : (
-              <div className="grid grid-cols-2 gap-2"><button disabled={rover.emergency} onClick={() => send({ type: 'lift', robot: 'RMC2', height: 0.05 })} className="rounded-lg bg-amber-800 px-3 py-2 disabled:opacity-40">Поднять лифт</button><button disabled={rover.emergency} onClick={() => send({ type: 'lift', robot: 'RMC2', height: 0 })} className="rounded-lg bg-amber-800 px-3 py-2 disabled:opacity-40">Опустить лифт</button></div>
+              <div className="grid grid-cols-2 gap-2"><button disabled={rover.emergency} onClick={() => send({ type: 'lift', robot: 'RMC2', height: 0.1 })} className="rounded-lg bg-amber-800 px-3 py-2 disabled:opacity-40">Поднять лифт</button><button disabled={rover.emergency} onClick={() => send({ type: 'lift', robot: 'RMC2', height: 0 })} className="rounded-lg bg-amber-800 px-3 py-2 disabled:opacity-40">Опустить лифт</button></div>
             )}
           </Card>
         </aside>

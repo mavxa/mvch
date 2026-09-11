@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Рисует bbox, название класса и confidence модели на фотографии."""
-
 import argparse
 from pathlib import Path
 
@@ -28,7 +26,7 @@ def select_device(requested, torch):
 
 
 def arguments():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser()
     parser.add_argument("source", help="Фотография для проверки")
     parser.add_argument("--weights", default="models/latest.pt")
     parser.add_argument("--output", default="predictions", help="Каталог результата")

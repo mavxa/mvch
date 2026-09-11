@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Модуль В: распознать деталь, взять ARM95 и вернуть на полку."""
-
 import argparse
 import json
 import math
@@ -46,7 +44,7 @@ def target_name(value):
 
 
 def arguments():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser()
     parser.add_argument("--target", help="1/hammer, 2/wrench или 3/pliers")
     parser.add_argument("--weights", default="models/latest.pt")
     parser.add_argument("--sim", action="store_true", help="Камера/TF и часы Webots")

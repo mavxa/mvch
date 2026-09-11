@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Преобразует polygon-разметку Roboflow в обычные YOLO bounding boxes."""
-
 import argparse
 from pathlib import Path
 
@@ -9,7 +7,7 @@ HERE = Path(__file__).resolve().parent
 
 
 def arguments():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", default="training", help="Каталог Roboflow export")
     return parser.parse_args()
 
