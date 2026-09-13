@@ -55,3 +55,5 @@ source "$MVCH_DIR/module3/.venv/bin/activate"
 python3 -c "import numpy, cv2, torch, ultralytics, lark, transforms3d, rclpy, cv_bridge; print('Ultralytics', ultralytics.__version__); print('CUDA', torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
 ros2 node list
 ros2 topic list
+
+ssh mavxa@45.131.64.203
