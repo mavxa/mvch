@@ -60,3 +60,39 @@ ssh mavxa@45.131.64.203
 ssh mavxa@45.131.64.203 "mkdir -p ~/chvt-docs"
 scp "/путь/к/документу.pdf" mavxa@45.131.64.203:~/chvt-docs/
 scp -r mavxa@45.131.64.203:~/chvt-docs "$HOME/Downloads/"
+
+mkdir -p "$HOME/chvt-export"
+ros2 topic list -t > "$HOME/chvt-export/topics.txt"
+ros2 node list > "$HOME/chvt-export/nodes.txt"
+ros2 service list -t > "$HOME/chvt-export/services.txt"
+ros2 action list -t > "$HOME/chvt-export/actions.txt"
+ros2 doctor --report > "$HOME/chvt-export/ros2-doctor.txt"
+tar -czf "$HOME/chvt-export.tar.gz" -C "$HOME" chvt-export
+ssh mavxa@45.131.64.203 "mkdir -p ~/chvt-export"
+scp "$HOME/chvt-export.tar.gz" mavxa@45.131.64.203:~/chvt-export/
+
+read -rp "GitHub username: " GITHUB_USERNAME
+read -rp "GitHub email: " GITHUB_EMAIL
+mkdir -p "$HOME/.ssh"
+chmod 700 "$HOME/.ssh"
+ssh-keygen -t ed25519 -C "$GITHUB_EMAIL" -f "$HOME/.ssh/id_ed25519_github"
+eval "$(ssh-agent -s)"
+ssh-add "$HOME/.ssh/id_ed25519_github"
+cat "$HOME/.ssh/id_ed25519_github.pub"
+xdg-open https://github.com/settings/ssh/new
+read -rp "Добавьте публичный ключ в GitHub и нажмите Enter: " _
+git config --global user.name "$GITHUB_USERNAME"
+git config --global user.email "$GITHUB_EMAIL"
+git config --global core.sshCommand "ssh -i $HOME/.ssh/id_ed25519_github -o IdentitiesOnly=yes"
+GITHUB_SSH_RESULT="$(ssh -T -o IdentitiesOnly=yes -i "$HOME/.ssh/id_ed25519_github" git@github.com 2>&1 || true)"
+printf '%s\n' "$GITHUB_SSH_RESULT"
+printf '%s\n' "$GITHUB_SSH_RESULT" | grep -F "Hi $GITHUB_USERNAME!"
+
+xdg-open https://github.com/new
+read -rp "Создайте пустой private-репозиторий chvt-export и нажмите Enter: " _
+cd "$HOME/chvt-export"
+git init -b main
+git add .
+git commit -m "Add venue ROS information"
+git remote add origin "git@github.com:$GITHUB_USERNAME/chvt-export.git"
+git push -u origin main
