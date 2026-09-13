@@ -1,5 +1,5 @@
 sudo apt update
-sudo apt install -y git curl wget unzip xz-utils snapd locales software-properties-common ca-certificates gnupg python3 python3-pip python3-venv python3-dev build-essential openssh-client ffmpeg libgl1 libglib2.0-0 mesa-utils v4l-utils iputils-ping pciutils ubuntu-drivers-common
+sudo apt install -y git curl wget unzip xz-utils snapd ca-certificates python3 python3-pip python3-venv python3-dev build-essential openssh-client ffmpeg libgl1 libglib2.0-0 mesa-utils v4l-utils iputils-ping pciutils
 
 sudo snap install code --classic
 export PATH="/snap/bin:$PATH"
@@ -24,39 +24,7 @@ export NVM_DIR="$HOME/.nvm"
 nvm install --lts
 nvm use --lts
 
-curl -fsSL https://opencode.ai/install | bash
-
-sudo locale-gen en_US en_US.UTF-8
-sudo update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
-export LANG=en_US.UTF-8
-sudo add-apt-repository universe -y
-export ROS_APT_SOURCE_VERSION=$(curl -s https://api.github.com/repos/ros-infrastructure/ros-apt-source/releases/latest | grep -F 'tag_name' | awk -F\" '{print $4}')
-curl -L -o /tmp/ros2-apt-source.deb "https://github.com/ros-infrastructure/ros-apt-source/releases/download/${ROS_APT_SOURCE_VERSION}/ros2-apt-source_${ROS_APT_SOURCE_VERSION}.$(. /etc/os-release && echo ${UBUNTU_CODENAME:-${VERSION_CODENAME}})_all.deb"
-sudo dpkg -i /tmp/ros2-apt-source.deb
-sudo apt update
-sudo apt install -y ros-jazzy-desktop ros-jazzy-rmw-fastrtps-cpp ros-jazzy-navigation2 ros-jazzy-nav2-bringup ros-jazzy-moveit ros-jazzy-tf2-tools ros-jazzy-cv-bridge ros-jazzy-image-transport ros-jazzy-webots-ros2 python3-colcon-common-extensions python3-rosdep ros-dev-tools
-
-sudo install -d /etc/apt/keyrings
-sudo wget -q -O /etc/apt/keyrings/Cyberbotics.asc https://cyberbotics.com/Cyberbotics.asc
-echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/Cyberbotics.asc] https://cyberbotics.com/debian binary-amd64/" | sudo tee /etc/apt/sources.list.d/Cyberbotics.list
-sudo apt update
-sudo apt install -y webots
-
-if [ ! -f /etc/ros/rosdep/sources.list.d/20-default.list ]; then sudo rosdep init; fi
-rosdep update
-
-mkdir -p "$HOME/ros2_ws/src"
-cd "$HOME/ros2_ws/src"
-test -d ar_webots_fms_ros2/.git || git clone https://gitlab.mobird.dev/fms_group/ar_webots_fms_ros2.git
-test -d ar_arm95_moveit_config/.git || git clone https://gitlab.mobird.dev/fms_group/ar_arm95_moveit_config.git
-test -d ar_aruco_detect_ros2/.git || git clone https://gitlab.mobird.dev/fms_group/ar_aruco_detect_ros2.git
-test -d ar_dual_lidar_merge_ros2/.git || git clone https://gitlab.mobird.dev/fms_group/ar_dual_lidar_merge_ros2.git
-test -d ar_nav_ros2/.git || git clone https://gitlab.mobird.dev/fms_group/ar_nav_ros2.git
-
-cd "$HOME/ros2_ws"
 source /opt/ros/jazzy/setup.bash
-rosdep install --from-paths src -y --ignore-src --rosdistro jazzy
-colcon build --symlink-install
 source "$HOME/ros2_ws/install/setup.bash"
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 
@@ -79,7 +47,6 @@ python3 --version
 node --version
 npm --version
 bun --version
-opencode --version
 ros2 --help >/dev/null
 webots --version
 nvidia-smi

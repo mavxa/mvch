@@ -15,6 +15,49 @@
 Нужен установленный официальный симулятор, ROS 2 Jazzy, `rclpy`, `tf2_ros`.
 Дополнительные pip-пакеты и сборка colcon самого решения не нужны.
 
+### Если ROS2 или симулятор отсутствуют
+
+Штатная площадка должна предоставлять готовые ROS2 Jazzy, Webots и workspace
+симулятора. Сначала попросите эксперта восстановить окружение. Для самостоятельной
+установки нужен Ubuntu 24.04; ROS2 устанавливается по
+[официальной инструкции](https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debs.html).
+После подключения ROS-репозитория:
+
+```bash
+sudo apt update
+sudo apt install -y ros-jazzy-desktop ros-jazzy-rmw-fastrtps-cpp \
+  ros-jazzy-navigation2 ros-jazzy-nav2-bringup ros-jazzy-moveit \
+  ros-jazzy-tf2-tools ros-jazzy-cv-bridge ros-jazzy-image-transport \
+  ros-jazzy-webots-ros2 python3-colcon-common-extensions python3-rosdep ros-dev-tools
+```
+
+Webots ставится из [репозитория Cyberbotics](https://cyberbotics.com/doc/guide/installation-procedure):
+
+```bash
+sudo install -d /etc/apt/keyrings
+sudo wget -q -O /etc/apt/keyrings/Cyberbotics.asc https://cyberbotics.com/Cyberbotics.asc
+echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/Cyberbotics.asc] https://cyberbotics.com/debian binary-amd64/" \
+  | sudo tee /etc/apt/sources.list.d/Cyberbotics.list
+sudo apt update
+sudo apt install -y webots
+```
+
+Исходники официального симулятора:
+
+```bash
+mkdir -p ~/ros2_ws/src
+cd ~/ros2_ws/src
+git clone https://gitlab.mobird.dev/fms_group/ar_webots_fms_ros2.git
+git clone https://gitlab.mobird.dev/fms_group/ar_arm95_moveit_config.git
+git clone https://gitlab.mobird.dev/fms_group/ar_aruco_detect_ros2.git
+git clone https://gitlab.mobird.dev/fms_group/ar_dual_lidar_merge_ros2.git
+git clone https://gitlab.mobird.dev/fms_group/ar_nav_ros2.git
+cd ~/ros2_ws
+source /opt/ros/jazzy/setup.bash
+rosdep install --from-paths src -y --ignore-src --rosdistro jazzy
+colcon build --symlink-install
+```
+
 Терминал 1 — штатный симулятор (один экземпляр):
 
 ```bash
