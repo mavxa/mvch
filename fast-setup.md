@@ -57,3 +57,6 @@ ros2 node list
 ros2 topic list
 
 ssh mavxa@45.131.64.203
+ssh mavxa@45.131.64.203 "mkdir -p ~/chvt-docs"
+scp "/путь/к/документу.pdf" mavxa@45.131.64.203:~/chvt-docs/
+scp -r mavxa@45.131.64.203:~/chvt-docs "$HOME/Downloads/"
