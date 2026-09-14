@@ -16,6 +16,8 @@ MAX_SPEED = 0.35
 MAX_ANGULAR = 0.60
 STOP_DISTANCE = 0.65
 TOLERANCE = 0.07
+SCAN_TOPIC = "/RMC2/scan_front"
+BLOCKED = set()
 
 
 def clamp(value, low, high):
@@ -51,14 +53,14 @@ def inverse(pose):
     )
 
 
-def marker_pose(marker, columns, spacing):
-    row, column = divmod(marker, columns)
-    return -row * spacing, column * spacing, 0.0
+def marker_pose(marker):
+    row, column = divmod(marker, COLUMNS)
+    return -row * SPACING, column * SPACING, 0.0
 
 
-def shortest_path(start, goal, rows, columns, blocked, forbidden=()):
-    if start in blocked or goal in blocked:
-        raise RuntimeError("Старт или цель находятся в закрытой ячейке")
+def shortest_path(start, goal, forbidden=()):
+    if start in BLOCKED or goal in BLOCKED:
+        raise RuntimeError("невозможная цель")
 
     forbidden = {frozenset(edge) for edge in forbidden}
     search = deque([start])
@@ -68,24 +70,24 @@ def shortest_path(start, goal, rows, columns, blocked, forbidden=()):
         current = search.popleft()
         if current == goal:
             break
-        row, column = divmod(current, columns)
+        row, column = divmod(current, COLUMNS)
         for next_row, next_column in (
             (row - 1, column),
             (row + 1, column),
             (row, column - 1),
             (row, column + 1),
         ):
-            if not (0 <= next_row < rows and 0 <= next_column < columns):
+            if not (0 <= next_row < ROWS and 0 <= next_column < COLUMNS):
                 continue
-            candidate = next_row * columns + next_column
+            candidate = next_row * COLUMNS + next_column
             edge = frozenset((current, candidate))
-            if candidate in blocked or candidate in parent or edge in forbidden:
+            if candidate in BLOCKED or candidate in parent or edge in forbidden:
                 continue
             parent[candidate] = current
             search.append(candidate)
 
     if goal not in parent:
-        raise RuntimeError(f"Нет маршрута {start} -> {goal}")
+        raise RuntimeError(f"нет маршрута {start} к {goal}")
 
     route = []
     current = goal
@@ -98,51 +100,11 @@ def shortest_path(start, goal, rows, columns, blocked, forbidden=()):
 def arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", type=int, required=True)
-    parser.add_argument("--rows", type=int)
-    parser.add_argument("--columns", type=int)
-    parser.add_argument("--spacing", type=float, default=SPACING)
-    parser.add_argument("--blocked", type=int, nargs="*", default=[])
-    parser.add_argument("--speed", type=float, default=MAX_SPEED)
-    parser.add_argument("--angular", type=float, default=MAX_ANGULAR)
-    parser.add_argument("--stop-distance", type=float, default=STOP_DISTANCE)
-    parser.add_argument("--tolerance", type=float, default=TOLERANCE)
-    parser.add_argument("--scan-topic", default="/RMC2/scan_front")
-    parser.add_argument("--sim", action="store_true", help="Симулятор с сеткой 6x6")
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--start", type=int, default=0)
-    args = parser.parse_args()
-
-    if args.rows is None:
-        args.rows = 6 if args.sim else ROWS
-    if args.columns is None:
-        args.columns = 6 if args.sim else COLUMNS
-
-    count = args.rows * args.columns
-    if args.rows < 1 or args.columns < 1:
-        parser.error("rows и columns должны быть больше нуля")
-    if not 0 <= args.target < count:
-        parser.error(f"target должен быть в диапазоне 0..{count - 1}")
-    if args.spacing <= 0 or args.stop_distance <= 0 or args.tolerance <= 0:
-        parser.error("расстояния должны быть больше нуля")
-    if not 0 < args.speed <= 0.5:
-        parser.error("скорость RMC2 должна быть в диапазоне 0..0.5 м/с")
-    if not 0 < args.angular <= 1.0:
-        parser.error("angular должна быть в диапазоне 0..1.0 рад/с")
-    if args.dry_run and not 0 <= args.start < count:
-        parser.error(f"start должен быть в диапазоне 0..{count - 1}")
-    return args
+    return parser.parse_args().target
 
 
 def main():
-    args = arguments()
-    blocked = set(args.blocked)
-
-    if args.dry_run:
-        there = shortest_path(args.start, args.target, args.rows, args.columns, blocked)
-        back = shortest_path(args.target, args.start, args.rows, args.columns, blocked)
-        print("К ЦЕЛИ:", " -> ".join(map(str, there)))
-        print("НА СТАРТ:", " -> ".join(map(str, back)))
-        return
+    target_id = arguments()
 
     import rclpy
     from geometry_msgs.msg import Twist
@@ -169,7 +131,7 @@ def main():
                 Odometry, "/RMC2/odometry", self.on_odom, qos_profile_sensor_data
             )
             self.create_subscription(
-                LaserScan, args.scan_topic, self.on_scan, qos_profile_sensor_data
+                LaserScan, SCAN_TOPIC, self.on_scan, qos_profile_sensor_data
             )
             self.create_subscription(
                 String, "/RMC2/camera_bottom/aruco_id", self.on_marker, 10
@@ -240,7 +202,7 @@ def main():
             if not match:
                 return
             marker = int(match.group())
-            if not 0 <= marker < args.rows * args.columns:
+            if not 0 <= marker < ROWS * COLUMNS:
                 return
             if marker != self.marker:
                 self.log("MARKER", marker=marker)
@@ -274,7 +236,7 @@ def main():
                 yaw(transform.rotation),
             )
             self.map_from_odom = compose(
-                marker_pose(self.marker, args.columns, args.spacing), inverse(odom_marker)
+                marker_pose(self.marker), inverse(odom_marker)
             )
             self.pose = compose(self.map_from_odom, self.odom)
             self.marker_error = math.hypot(
@@ -301,7 +263,7 @@ def main():
             while rclpy.ok():
                 self.update()
                 self.stop()
-                if self.pose is not None and self.marker_error <= args.tolerance:
+                if self.pose is not None and self.marker_error <= TOLERANCE:
                     self.current = self.marker
                     self.log("START_FOUND", marker=self.current)
                     return self.current
@@ -310,11 +272,11 @@ def main():
             return (
                 self.marker == marker
                 and time.monotonic() - self.marker_seen < 0.8
-                and self.marker_error <= args.tolerance
+                and self.marker_error <= TOLERANCE
             )
 
         def drive_to(self, marker, check_obstacle=True):
-            target = marker_pose(marker, args.columns, args.spacing)
+            target = marker_pose(marker)
             while rclpy.ok():
                 self.update()
                 if self.pose is None:
@@ -328,18 +290,16 @@ def main():
                 dy = target[1] - self.pose[1]
                 distance = math.hypot(dx, dy)
                 error = wrap(math.atan2(dy, dx) - self.pose[2])
-                linear = 0.0 if abs(error) > 0.16 else min(args.speed, max(0.04, 0.7 * distance))
-                angular = clamp(1.4 * error, -args.angular, args.angular)
+                linear = 0.0 if abs(error) > 0.16 else min(MAX_SPEED, max(0.04, 0.7 * distance))
+                angular = clamp(1.4 * error, -MAX_ANGULAR, MAX_ANGULAR)
 
-                if check_obstacle and linear > 0 and self.front < args.stop_distance:
+                if check_obstacle and linear > 0 and self.front < STOP_DISTANCE:
                     self.stop()
                     return False
                 self.send(linear, angular)
 
         def follow(self, goal, forbidden):
-            route = shortest_path(
-                self.current, goal, args.rows, args.columns, blocked, forbidden
-            )
+            route = shortest_path(self.current, goal, forbidden)
             index = 1
             while index < len(route):
                 next_marker = route[index]
@@ -358,15 +318,13 @@ def main():
                 )
                 print(f"Препятствие перед {next_marker}. Возвращаюсь к {self.current}.")
                 self.drive_to(self.current, check_obstacle=False)
-                route = shortest_path(
-                    self.current, goal, args.rows, args.columns, blocked, forbidden
-                )
+                route = shortest_path(self.current, goal, forbidden)
                 index = 1
                 show_route(self, "НОВЫЙ МАРШРУТ", route, "ROUTE_REPLANNED")
             return route
 
     def show_route(rover, title, route, event):
-        print(f"{title}: {' -> '.join(map(str, route))}")
+        print(f"{title}: {' путь: '.join(map(str, route))}")
         rover.log(event, markers=route)
 
     rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
@@ -374,25 +332,25 @@ def main():
     exit_code = 0
     try:
         start = rover.wait_start()
-        route_there = shortest_path(start, args.target, args.rows, args.columns, blocked)
-        route_back = shortest_path(args.target, start, args.rows, args.columns, blocked)
+        route_there = shortest_path(start, target_id)
+        route_back = shortest_path(target_id, start)
 
         print()
         show_route(rover, "МАРШРУТ К ЦЕЛИ", route_there, "ROUTE_TO_TARGET")
         show_route(rover, "МАРШРУТ НА СТАРТ", route_back, "ROUTE_TO_START")
-        input("\nEnter — начать движение: ")
+        input("\nenter - начать движение:")
 
         started = time.monotonic()
         rover.log("MOVEMENT_START", markers=route_there)
-        rover.follow(args.target, set())
+        rover.follow(target_id, set())
         first_time = time.monotonic() - started
-        rover.log("MOVEMENT_FINISHED", marker=args.target, seconds=round(first_time, 2))
-        rover.log("TARGET_REACHED", marker=args.target, seconds=round(first_time, 2))
+        rover.log("MOVEMENT_FINISHED", marker=target_id, seconds=round(first_time, 2))
+        rover.log("TARGET_REACHED", marker=target_id, seconds=round(first_time, 2))
 
-        input("\nЦель достигнута. Поставьте препятствие и нажмите Enter: ")
+        input("\nцель достигнута. ожидание препятствие и enter: ")
         rover.leg = "return"
         show_route(rover, "МАРШРУТ НА СТАРТ", route_back, "ROUTE_TO_START")
-        input("Enter — начать возврат: ")
+        input("Enter - начать возврат: ")
 
         started = time.monotonic()
         rover.log("MOVEMENT_START", markers=route_back)

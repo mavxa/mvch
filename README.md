@@ -73,7 +73,7 @@ cd ~/mvch
 git pull --ff-only
 source /opt/ros/jazzy/setup.bash
 source ~/ros2_ws/install/setup.bash
-python3 module2/module_b.py --target 14 --sim
+python3 module2/module_b.py --target 14
 ```
 
 1. Поставьте РМК-2 центром над любой меткой. Код сам определит стартовый ID и
@@ -86,31 +86,25 @@ python3 module2/module_b.py --target 14 --sim
    исключит ребро и выведет `ROUTE_REPLANNED`.
 6. Успешный конец — `MISSION_FINISHED`. `Ctrl+C` публикует нулевую скорость.
 
-На физическом РМК-2 команда такая же, только `--sim` можно не писать:
+На физическом РМК-2 команда такая же:
 
 ```bash
 python3 module2/module_b.py --target 14
 ```
 
-Без `--sim` используется площадочное поле 5×5, ID 0–24. Флаг `--sim`
-включает старый Webots 6×6, ID 0–35. Закрытые ячейки передаются через
-`--blocked`:
+Единственный аргумент — целевой ID:
 
 ```bash
-python3 module2/module_b.py --target 14 --blocked 7 8 13 --sim
+python3 module2/module_b.py --target 14
 ```
 
-Основные параметры:
+Остальные настройки находятся в начале `module2/module_b.py`:
 
-- `--target` — целевой ArUco ID;
-- `--blocked` — закрытые ячейки;
-- `--sim` — профиль симулятора 6×6;
-- `--rows`, `--columns`, `--spacing` — геометрия сетки;
-- `--speed` — линейная скорость, по умолчанию 0.35 м/с, предел RMC2 0.5 м/с;
-- `--angular` — скорость поворота, по умолчанию 0.6 рад/с;
-- `--stop-distance` — дистанция срабатывания объезда, по умолчанию 0.65 м;
-- `--tolerance` — допустимое смещение от центра ArUco, по умолчанию 0.07 м;
-- `--scan-topic` — передний лидар, по умолчанию `/RMC2/scan_front`.
+- `ROWS`, `COLUMNS` — площадка 5×5; для старого симулятора поставить 6 и 6;
+- `SPACING` — шаг между метками;
+- `BLOCKED` — закрытые ID, например `{7, 8, 13}`;
+- `MAX_SPEED`, `MAX_ANGULAR` — скорости;
+- `STOP_DISTANCE`, `TOLERANCE`, `SCAN_TOPIC` — lidar и точность остановки.
 
 ## Как устроен код
 
@@ -126,13 +120,7 @@ odometry, а на каждой следующей метке снова корр
 workspace RMC2 управляется через `/RMC2/cmd_vel`; Nav2 настроен для RMC1. Поэтому
 модуль Б напрямую использует ArUco, odometry и `/RMC2/scan_front`.
 
-## Проверки и логи
-
-```bash
-python3 module2/module_b.py --target 14 --start 0 --dry-run
-python3 module2/module_b.py --target 8 --start 0 --sim --dry-run
-python3 module2/module_b.py --target 24 --start 6 --blocked 7 8 --dry-run
-```
+## Логи
 
 `module2/reports/module_b_*.jsonl` содержит обнаруженные маркеры, оба маршрута,
 препятствия, достигнутые точки и чистое время движения. Паузы на установку
