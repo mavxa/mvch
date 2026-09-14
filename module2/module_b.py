@@ -1,189 +1,147 @@
 #!/usr/bin/env python3
 import argparse
-import heapq
 import json
 import math
-import queue
 import re
-import signal
-import sys
-import threading
 import time
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 
 
-# Профили поля из симулятора и документации физических РМК от 08.09.2026.
-SIM_FIELD = (6, 6, 1.0)
-REAL_FIELD = (5, 5, 1.0)
-BLOCKED_MARKERS = set()
-
-ROBOT_NAMESPACE = "RMC2"
-MARKER_PREFIX = "aruco_"
-# В Webots край корпуса около 0.375 м. Реальный RMC2 имеет габарит до 0.870 м.
-SIM_HALF_SIZE = 0.375
-REAL_HALF_SIZE = 0.435
-SAFETY_MARGIN = 0.04
-
-MAX_LINEAR = 0.25
-MAX_ANGULAR = 0.45
-LINEAR_ACCEL = 0.35
-ANGULAR_ACCEL = 0.80
-POSITION_TOLERANCE = 0.025
-YAW_TOLERANCE = 0.045
-MOVE_YAW_TOLERANCE = 0.14
-SENSOR_TIMEOUT = 1.5
-MARKER_TIMEOUT = 0.8
-WAYPOINT_TIMEOUT = 50.0
-MISSION_TIMEOUT = 330.0
-
-
-def wrap(angle):
-    return math.atan2(math.sin(angle), math.cos(angle))
+ROWS = 5
+COLUMNS = 5
+SPACING = 1.0
+MAX_SPEED = 0.35
+MAX_ANGULAR = 0.60
+STOP_DISTANCE = 0.65
+TOLERANCE = 0.07
 
 
 def clamp(value, low, high):
     return max(low, min(high, value))
 
 
+def wrap(angle):
+    return math.atan2(math.sin(angle), math.cos(angle))
+
+
+def yaw(quaternion):
+    return math.atan2(
+        2 * (quaternion.w * quaternion.z + quaternion.x * quaternion.y),
+        1 - 2 * (quaternion.y**2 + quaternion.z**2),
+    )
+
+
 def compose(a, b):
-    """Переносит позу b из системы a в её родительскую систему."""
-    x, y, yaw = a
-    c, s = math.cos(yaw), math.sin(yaw)
-    return x + c*b[0] - s*b[1], y + s*b[0] + c*b[1], wrap(yaw+b[2])
+    cosine, sine = math.cos(a[2]), math.sin(a[2])
+    return (
+        a[0] + cosine * b[0] - sine * b[1],
+        a[1] + sine * b[0] + cosine * b[1],
+        wrap(a[2] + b[2]),
+    )
 
 
 def inverse(pose):
-    x, y, yaw = pose
-    c, s = math.cos(yaw), math.sin(yaw)
-    return -c*x-s*y, s*x-c*y, -yaw
+    cosine, sine = math.cos(pose[2]), math.sin(pose[2])
+    return (
+        -cosine * pose[0] - sine * pose[1],
+        sine * pose[0] - cosine * pose[1],
+        -pose[2],
+    )
 
 
-def distance(a, b):
-    return math.hypot(a[0]-b[0], a[1]-b[1])
+def marker_pose(marker, columns, spacing):
+    row, column = divmod(marker, columns)
+    return -row * spacing, column * spacing, 0.0
 
 
-def segment_distance(point, a, b):
-    dx, dy = b[0]-a[0], b[1]-a[1]
-    length2 = dx*dx+dy*dy
-    if length2 == 0:
-        return distance(point, a)
-    t = clamp(((point[0]-a[0])*dx+(point[1]-a[1])*dy)/length2, 0, 1)
-    return distance(point, (a[0]+t*dx, a[1]+t*dy))
+def shortest_path(start, goal, rows, columns, blocked, forbidden=()):
+    if start in blocked or goal in blocked:
+        raise RuntimeError("Старт или цель находятся в закрытой ячейке")
 
+    forbidden = {frozenset(edge) for edge in forbidden}
+    search = deque([start])
+    parent = {start: None}
 
-class Field:
-    """Регулярная сетка ArUco и кратчайший путь по ней."""
-
-    def __init__(self, rows, columns, spacing, clearance):
-        self.rows = rows
-        self.columns = columns
-        self.spacing = spacing
-        self.clearance = clearance
-        self.poses = {}
-        self.graph = {}
-        for row in range(rows):
-            for col in range(columns):
-                marker = row*columns+col
-                self.poses[marker] = (-row*spacing, col*spacing, 0.0)
-                self.graph[marker] = [
-                    r*columns+c for r, c in
-                    ((row+1, col), (row, col+1), (row-1, col), (row, col-1))
-                    if 0 <= r < rows and 0 <= c < columns
-                ]
-
-    def nearest(self, x, y):
-        return min(self.poses, key=lambda marker: distance((x, y), self.poses[marker]))
-
-    def route(self, start, goal, obstacle_points=(), forbidden_edges=()):
-        """Дейкстра: кратчайший по длине свободный путь."""
-        if start not in self.poses or goal not in self.poses:
-            raise ValueError("ID старта или цели отсутствует в графе")
-        if start in BLOCKED_MARKERS or goal in BLOCKED_MARKERS:
-            raise ValueError("Старт или цель заблокированы")
-
-        forbidden = {frozenset(edge) for edge in forbidden_edges}
-        costs = {start: 0.0}
-        parents = {start: None}
-        queue_path = [(0.0, start)]
-        while queue_path:
-            cost, current = heapq.heappop(queue_path)
-            if cost > costs[current]:
+    while search:
+        current = search.popleft()
+        if current == goal:
+            break
+        row, column = divmod(current, columns)
+        for next_row, next_column in (
+            (row - 1, column),
+            (row + 1, column),
+            (row, column - 1),
+            (row, column + 1),
+        ):
+            if not (0 <= next_row < rows and 0 <= next_column < columns):
                 continue
-            if current == goal:
-                path = []
-                while current is not None:
-                    path.append(current)
-                    current = parents[current]
-                return path[::-1]
-            for neighbor in self.graph[current]:
-                edge = frozenset((current, neighbor))
-                if neighbor in BLOCKED_MARKERS or edge in forbidden:
-                    continue
-                a, b = self.poses[current], self.poses[neighbor]
-                if any(segment_distance(p, a, b) < self.clearance for p in obstacle_points):
-                    continue
-                new_cost = cost+distance(a, b)
-                if new_cost < costs.get(neighbor, math.inf):
-                    costs[neighbor] = new_cost
-                    parents[neighbor] = current
-                    heapq.heappush(queue_path, (new_cost, neighbor))
-        raise ValueError(f"Нет безопасного маршрута {start} -> {goal}")
+            candidate = next_row * columns + next_column
+            edge = frozenset((current, candidate))
+            if candidate in blocked or candidate in parent or edge in forbidden:
+                continue
+            parent[candidate] = current
+            search.append(candidate)
+
+    if goal not in parent:
+        raise RuntimeError(f"Нет маршрута {start} -> {goal}")
+
+    route = []
+    current = goal
+    while current is not None:
+        route.append(current)
+        current = parent[current]
+    return list(reversed(route))
 
 
 def arguments():
     parser = argparse.ArgumentParser()
-    target = parser.add_mutually_exclusive_group(required=True)
-    target.add_argument("--target", type=int, help="ID целевой метки")
-    target.add_argument("--xy", nargs=2, type=float, help="Координаты цели на карте, метры")
-    parser.add_argument("--sim", action="store_true", help="Часы Webots /clock")
-    parser.add_argument("--rows", type=int, help="Число строк ArUco-сетки")
-    parser.add_argument("--columns", type=int, help="Число столбцов ArUco-сетки")
-    parser.add_argument("--spacing", type=float, help="Шаг между ArUco, м")
-    parser.add_argument("--base-frame", help="TF-фрейм корпуса RMC2")
-    parser.add_argument("--odom-frame", help="TF-фрейм одометрии RMC2")
-    parser.add_argument("--target-yaw", type=float, help="Ориентация на цели в системе поля, рад")
-    parser.add_argument("--auto", action="store_true", help="Только тренировка: без команд эксперта")
-    parser.add_argument("--return-delay", type=float, default=5.0, help="Пауза --auto, секунд симуляции")
-    parser.add_argument("--dry-run", action="store_true", help="Показать путь без ROS и без движения")
-    parser.add_argument("--start", type=int, default=0, help="Старт только для --dry-run")
+    parser.add_argument("--target", type=int, required=True)
+    parser.add_argument("--rows", type=int, default=ROWS)
+    parser.add_argument("--columns", type=int, default=COLUMNS)
+    parser.add_argument("--spacing", type=float, default=SPACING)
+    parser.add_argument("--blocked", type=int, nargs="*", default=[])
+    parser.add_argument("--speed", type=float, default=MAX_SPEED)
+    parser.add_argument("--angular", type=float, default=MAX_ANGULAR)
+    parser.add_argument("--stop-distance", type=float, default=STOP_DISTANCE)
+    parser.add_argument("--tolerance", type=float, default=TOLERANCE)
+    parser.add_argument("--scan-topic", default="/RMC2/scan_front")
+    parser.add_argument("--sim", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--start", type=int, default=0)
     args = parser.parse_args()
-    if args.auto and not args.sim:
-        parser.error("--auto разрешён только с --sim")
-    if args.return_delay < 0 or not math.isfinite(args.return_delay):
-        parser.error("--return-delay должен быть конечным неотрицательным числом")
-    if args.target_yaw is not None and not math.isfinite(args.target_yaw):
-        parser.error("--target-yaw должен быть конечным числом")
-    if args.xy and not all(math.isfinite(v) for v in args.xy):
-        parser.error("--xy должен содержать конечные числа")
-    if args.rows is not None and args.rows < 1:
-        parser.error("--rows должен быть больше нуля")
-    if args.columns is not None and args.columns < 1:
-        parser.error("--columns должен быть больше нуля")
-    if args.spacing is not None and (args.spacing <= 0 or not math.isfinite(args.spacing)):
-        parser.error("--spacing должен быть конечным положительным числом")
+
+    count = args.rows * args.columns
+    if args.rows < 1 or args.columns < 1:
+        parser.error("rows и columns должны быть больше нуля")
+    if not 0 <= args.target < count:
+        parser.error(f"target должен быть в диапазоне 0..{count - 1}")
+    if args.spacing <= 0 or args.stop_distance <= 0 or args.tolerance <= 0:
+        parser.error("расстояния должны быть больше нуля")
+    if not 0 < args.speed <= 0.5:
+        parser.error("скорость RMC2 должна быть в диапазоне 0..0.5 м/с")
+    if not 0 < args.angular <= 1.0:
+        parser.error("angular должна быть в диапазоне 0..1.0 рад/с")
+    if args.dry_run and not 0 <= args.start < count:
+        parser.error(f"start должен быть в диапазоне 0..{count - 1}")
     return args
 
 
 def main():
     args = arguments()
-    default_rows, default_columns, default_spacing = SIM_FIELD if args.sim else REAL_FIELD
-    rows = args.rows if args.rows is not None else default_rows
-    columns = args.columns if args.columns is not None else default_columns
-    spacing = args.spacing if args.spacing is not None else default_spacing
-    half_size = SIM_HALF_SIZE if args.sim else REAL_HALF_SIZE
-    field = Field(rows, columns, spacing, half_size+SAFETY_MARGIN)
-    target = args.target if args.target is not None else field.nearest(*args.xy)
-    if target not in field.poses or target in BLOCKED_MARKERS:
-        raise SystemExit("Целевая метка отсутствует в графе или заблокирована")
+    blocked = set(args.blocked)
+
     if args.dry_run:
-        print("ROUTE", field.route(args.start, target), "TARGET", field.poses[target])
+        there = shortest_path(args.start, args.target, args.rows, args.columns, blocked)
+        back = shortest_path(args.target, args.start, args.rows, args.columns, blocked)
+        print("К ЦЕЛИ:", " -> ".join(map(str, there)))
+        print("НА СТАРТ:", " -> ".join(map(str, back)))
         return
 
     import rclpy
     from geometry_msgs.msg import Twist
     from nav_msgs.msg import Odometry
-    from rclpy.clock import Clock, ClockType
     from rclpy.node import Node
     from rclpy.qos import (
         DurabilityPolicy,
@@ -194,477 +152,267 @@ def main():
     from rclpy.signals import SignalHandlerOptions
     from rclpy.time import Time
     from sensor_msgs.msg import LaserScan
-    from std_msgs.msg import Bool, String
+    from std_msgs.msg import String
     from tf2_msgs.msg import TFMessage
-    from tf2_ros import Buffer, TransformListener, TransformException
+    from tf2_ros import Buffer, TransformException, TransformListener
 
-    def yaw(q):
-        return math.atan2(2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z))
-
-    def tf_pose(transform):
-        t = transform.transform
-        return t.translation.x, t.translation.y, yaw(t.rotation)
-
-    class Mission(Node):
+    class Rover(Node):
         def __init__(self):
             super().__init__("mvch_module_b")
-            self.set_parameters([rclpy.parameter.Parameter("use_sim_time", value=args.sim)])
-            self.cfg = {
-                "max_linear": MAX_LINEAR, "max_angular": MAX_ANGULAR,
-                "linear_accel": LINEAR_ACCEL, "angular_accel": ANGULAR_ACCEL,
-                "position_tolerance": POSITION_TOLERANCE,
-                "yaw_tolerance": YAW_TOLERANCE,
-                "move_yaw_tolerance": MOVE_YAW_TOLERANCE,
-                "sensor_timeout": SENSOR_TIMEOUT, "marker_timeout": MARKER_TIMEOUT,
-                "waypoint_timeout": WAYPOINT_TIMEOUT, "mission_timeout": MISSION_TIMEOUT,
-            }
-            self.robot = {
-                "namespace": ROBOT_NAMESPACE, "marker_prefix": MARKER_PREFIX,
-                "clearance": half_size+SAFETY_MARGIN,
-                "half_length": half_size,
-                "half_width": half_size,
-                "safety_margin": SAFETY_MARGIN,
-            }
-            ns = ROBOT_NAMESPACE.strip("/")
-            self.base = args.base_frame or f"{ns}/base_link"
-            self.odom_frame = args.odom_frame or f"{ns}/odom"
-            self.buffer = Buffer()
-            self.listener = TransformListener(self.buffer, self)
-            if not args.sim:
-                # На физических РМК TF опубликован в namespaced-топиках.
-                tf_qos = QoSProfile(
-                    depth=100,
-                    reliability=ReliabilityPolicy.BEST_EFFORT,
-                    durability=DurabilityPolicy.VOLATILE,
-                )
-                static_tf_qos = QoSProfile(
-                    depth=100,
-                    reliability=ReliabilityPolicy.RELIABLE,
-                    durability=DurabilityPolicy.TRANSIENT_LOCAL,
-                )
-                self.create_subscription(
-                    TFMessage, f"/{ns}/tf", self.on_tf, tf_qos
-                )
-                self.create_subscription(
-                    TFMessage, f"/{ns}/tf_static", self.on_tf_static, static_tf_qos
-                )
-            self.pub = self.create_publisher(Twist, f"/{ns}/cmd_vel", 1)
-            self.status_pub = self.create_publisher(String, "/mvch/status", 10)
-            self.create_subscription(Odometry, f"/{ns}/odometry", self.on_odom, qos_profile_sensor_data)
-            self.create_subscription(LaserScan, f"/{ns}/scan", self.on_scan, qos_profile_sensor_data)
-            aruco_topic = (
-                f"/{ns}/aruco_id" if args.sim else f"/{ns}/camera_bottom/aruco_id"
+            self.cmd = self.create_publisher(Twist, "/RMC2/cmd_vel", 10)
+            self.create_subscription(
+                Odometry, "/RMC2/odometry", self.on_odom, qos_profile_sensor_data
             )
-            self.create_subscription(String, aruco_topic, self.on_marker, 10)
-            self.create_subscription(Bool, "/mvch/emergency_stop", self.on_stop, 10)
-            self.create_subscription(String, "/mvch/command", lambda m: self.commands.put(m.data), 10)
-            self.commands = queue.Queue()
-            self.state, self.leg = "WAIT_SENSORS", "outbound"
-            self.odom = self.map_from_odom = self.pose = None
-            self.odom_wall = self.scan_wall = 0.0
-            self.scan = None
-            self.points, self.body_points = [], []
-            self.lidar_tf_wall = 0.0
-            self.lidar_tf_error = "TF лидара ещё не получен"
+            self.create_subscription(
+                LaserScan, args.scan_topic, self.on_scan, qos_profile_sensor_data
+            )
+            self.create_subscription(
+                String, "/RMC2/camera_bottom/aruco_id", self.on_marker, 10
+            )
+            self.create_subscription(String, "/RMC2/aruco_id", self.on_marker, 10)
+
+            self.tf_buffer = Buffer()
+            self.tf_listener = TransformListener(self.tf_buffer, self)
+            tf_qos = QoSProfile(
+                depth=100,
+                reliability=ReliabilityPolicy.BEST_EFFORT,
+                durability=DurabilityPolicy.VOLATILE,
+            )
+            static_qos = QoSProfile(
+                depth=100,
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            )
+            self.create_subscription(TFMessage, "/RMC2/tf", self.on_tf, tf_qos)
+            self.create_subscription(
+                TFMessage, "/RMC2/tf_static", self.on_tf_static, static_qos
+            )
+
+            self.odom = None
+            self.odom_frame = "RMC2/odom"
+            self.map_from_odom = None
+            self.pose = None
             self.marker = None
-            self.marker_wall = self.marker_stamp = 0.0
-            self.marker_distance = math.inf
-            self.start = self.current = None
-            self.start_yaw = 0.0
-            self.goal, self.route, self.index = target, [], 0
-            self.forbidden = set()
-            self.paused = False
-            self.terminal = False
-            self.failed = False
-            self.v = self.w = 0.0
-            self.last_sim = self.now()
-            self.last_wall = self.clock_wall = time.monotonic()
-            self.last_clock = self.last_sim
-            self.leg_started = self.waypoint_started = self.last_sim
-            self.total_time = 0.0
-            self.last_status = 0.0
-            self.wait_reason = ""
-            log_dir = Path(__file__).parent / "reports"
-            log_dir.mkdir(exist_ok=True)
-            self.log_path = log_dir / f"module_b_{datetime.now():%Y%m%d_%H%M%S_%f}.jsonl"
+            self.marker_seen = 0.0
+            self.marker_error = math.inf
+            self.front = math.inf
+            self.current = None
+            self.leg = "outbound"
+
+            reports = Path(__file__).parent / "reports"
+            reports.mkdir(exist_ok=True)
+            self.log_path = reports / f"module_b_{datetime.now():%Y%m%d_%H%M%S}.jsonl"
             self.log_file = self.log_path.open("a", encoding="utf-8", buffering=1)
-            # Таймер на монотонных часах: остановка сработает даже при паузе /clock.
-            self.timer = self.create_timer(0.05, self.tick, clock=Clock(clock_type=ClockType.STEADY_TIME))
-            self.log("READY", target=target, config="constants in module_b.py", sim=args.sim,
-                     field=f"{rows}x{columns}", aruco_topic=aruco_topic,
-                     instructions="Enter/go: старт; return: построить возврат; stop/resume; quit")
+
+        def log(self, event, **data):
+            item = {
+                "time": datetime.now().isoformat(timespec="milliseconds"),
+                "event": event,
+                "leg": self.leg,
+                **data,
+            }
+            line = json.dumps(item, ensure_ascii=False)
+            print(line, flush=True)
+            self.log_file.write(line + "\n")
 
         def on_tf(self, message):
             for transform in message.transforms:
-                self.buffer.set_transform(transform, "RMC2 namespaced tf")
+                self.tf_buffer.set_transform(transform, "RMC2 tf")
 
         def on_tf_static(self, message):
             for transform in message.transforms:
-                self.buffer.set_transform_static(transform, "RMC2 namespaced tf_static")
+                self.tf_buffer.set_transform_static(transform, "RMC2 tf_static")
 
-        def now(self):
-            return self.get_clock().now().nanoseconds / 1e9
+        def on_odom(self, message):
+            frame = message.header.frame_id.strip("/")
+            if frame:
+                self.odom_frame = frame
+            pose = message.pose.pose
+            self.odom = pose.position.x, pose.position.y, yaw(pose.orientation)
 
-        def log(self, event, **data):
-            item = dict(time=datetime.now().isoformat(timespec="milliseconds"),
-                        sim_time=round(self.now(), 3), event=event, leg=self.leg, **data)
-            line = json.dumps(item, ensure_ascii=False)
-            print(line, flush=True)
-            self.log_file.write(line+"\n")
-
-        def on_odom(self, msg):
-            p = msg.pose.pose
-            pose = p.position.x, p.position.y, yaw(p.orientation)
-            if all(math.isfinite(v) for v in pose):
-                self.odom, self.odom_wall = pose, time.monotonic()
-
-        def on_scan(self, msg):
-            # Пустой/повреждённый скан не считается свободным пространством.
-            if not msg.ranges or msg.angle_increment == 0:
+        def on_marker(self, message):
+            match = re.search(r"\d+", message.data)
+            if not match:
                 return
-            if not any(math.isfinite(r) and msg.range_min <= r <= msg.range_max for r in msg.ranges):
+            marker = int(match.group())
+            if not 0 <= marker < args.rows * args.columns:
                 return
-            self.scan, self.scan_wall = msg, time.monotonic()
+            if marker != self.marker:
+                self.log("MARKER", marker=marker)
+            self.marker = marker
+            self.marker_seen = time.monotonic()
 
-        def on_marker(self, msg):
-            match = re.fullmatch(re.escape(MARKER_PREFIX)+r"(\d+)", msg.data.strip())
-            if not match and msg.data.strip().isdigit():
-                marker = int(msg.data.strip())
-            elif match:
-                marker = int(match[1])
-            else:
-                return
-            if marker in field.poses:
-                self.marker, self.marker_wall = marker, time.monotonic()
-
-        def on_stop(self, msg):
-            if msg.data:
-                self.paused = True
-                self.stop()
-                self.log("EMERGENCY_STOP")
-            # false сам по себе не разрешает движение: требуется resume.
+        def on_scan(self, message):
+            front = []
+            for index, value in enumerate(message.ranges):
+                angle = message.angle_min + index * message.angle_increment
+                if abs(angle) <= math.radians(25):
+                    if math.isfinite(value) and message.range_min <= value <= message.range_max:
+                        front.append(value)
+            self.front = min(front, default=math.inf)
 
         def localize(self):
             if self.odom is None or self.marker is None:
                 return
-            frame = MARKER_PREFIX+str(self.marker)
+            if time.monotonic() - self.marker_seen > 0.8:
+                return
             try:
-                transform = self.buffer.lookup_transform(self.odom_frame, frame, Time())
-                stamp = transform.header.stamp.sec+transform.header.stamp.nanosec/1e9
-                if not 0 <= self.now()-stamp < self.cfg["marker_timeout"]:
-                    return
-                if time.monotonic()-self.marker_wall > self.cfg["sensor_timeout"]:
-                    return
-                odom_marker = tf_pose(transform)
-                self.marker_distance = distance(odom_marker, self.odom)
-                if stamp <= self.marker_stamp:
-                    return
-                correction = compose(field.poses[self.marker], inverse(odom_marker))
-                if self.map_from_odom is not None:
-                    old_pose = compose(self.map_from_odom, self.odom)
-                    new_pose = compose(correction, self.odom)
-                    if distance(old_pose, new_pose) > 0.4 or abs(wrap(old_pose[2]-new_pose[2])) > 0.6:
-                        return  # Не принимаем скачок распознавания; таймаут остановит у метки.
-                self.map_from_odom, self.marker_stamp = correction, stamp
+                transform = self.tf_buffer.lookup_transform(
+                    self.odom_frame, f"aruco_{self.marker}", Time()
+                ).transform
             except TransformException:
-                pass
-
-        def scan_points(self):
-            scan = self.scan
-            try:
-                # В этом симуляторе laser_merged повёрнут на 120 градусов!
-                mount = tf_pose(self.buffer.lookup_transform(self.base, scan.header.frame_id, Time()))
-                # Последний TF достаточно свежий: scan проверяется отдельно по wall-clock.
-                # Запрос строго по stamp иногда попадает между двумя odom TF и кратко падает.
-                at_scan = tf_pose(self.buffer.lookup_transform(self.odom_frame, self.base, Time()))
-            except TransformException as error:
-                self.lidar_tf_error = str(error)
-                return False
-            scan_in_map = compose(compose(self.map_from_odom, at_scan), mount)
-            body_from_map = inverse(self.pose)
-            points = {}
-            for i, r in enumerate(scan.ranges):
-                if not math.isfinite(r) or not scan.range_min <= r <= scan.range_max:
-                    continue
-                angle = scan.angle_min+i*scan.angle_increment
-                p = compose(scan_in_map, (r*math.cos(angle), r*math.sin(angle), 0))[:2]
-                b = compose(body_from_map, (*p, 0))
-                if abs(b[0]) < self.robot["half_length"] and abs(b[1]) < self.robot["half_width"]:
-                    continue  # собственный корпус, не внешнее препятствие
-                points[(round(p[0]/0.04), round(p[1]/0.04))] = p
-            self.points = list(points.values())
-            self.body_points = [compose(body_from_map, (*p, 0)) for p in self.points]
-            self.lidar_tf_wall = time.monotonic()
-            self.lidar_tf_error = ""
-            return True
-
-        def plan(self):
-            self.stop()
-            try:
-                self.route = field.route(
-                    self.current, self.goal, self.points, self.forbidden
-                )
-            except ValueError as error:
-                self.abort(str(error))
                 return
-            self.index = 1
-            self.state = "WAIT_GO"
-            direction = "К ЦЕЛИ" if self.leg == "outbound" else "НА СТАРТ"
-            print(f"\nМАРШРУТ {direction}: {' -> '.join(map(str, self.route))}", flush=True)
-            print("Ровер пока стоит. Эксперт проверяет маршрут; Enter/go разрешает движение.\n",
-                  flush=True)
-            self.log("ROUTE", markers=self.route, goal=self.goal)
-            self.log("WAIT_GO", message="Эксперт фиксирует маршрут. Enter/go разрешает движение.")
 
-        def stop(self):
-            self.v = self.w = 0.0
-            self.pub.publish(Twist())
+            odom_marker = (
+                transform.translation.x,
+                transform.translation.y,
+                yaw(transform.rotation),
+            )
+            self.map_from_odom = compose(
+                marker_pose(self.marker, args.columns, args.spacing), inverse(odom_marker)
+            )
+            self.pose = compose(self.map_from_odom, self.odom)
+            self.marker_error = math.hypot(
+                odom_marker[0] - self.odom[0], odom_marker[1] - self.odom[1]
+            )
 
-        def abort(self, reason):
-            self.stop()
-            self.failed = self.terminal = True
-            self.state = "FAILED"
-            self.log("FAILED", reason=reason, current=self.current)
-
-        def command(self, command):
-            command = command.strip().lower()
-            if command in ("stop", "s"):
-                self.paused = True
-                self.stop()
-                self.log("EMERGENCY_STOP")
-            elif command == "resume":
-                self.paused = False
-                self.log("RESUME")
-            elif command in ("quit", "q"):
-                self.abort("Остановлено оператором")
-            elif self.state == "WAIT_RETURN" and command in ("", "return", "go"):
-                self.leg, self.goal = "return", self.start
-                self.forbidden.clear()
-                self.plan()
-            elif self.state == "WAIT_GO" and command in ("", "go") and not self.paused:
-                # Новая преграда за время паузы: сначала показать новый маршрут.
-                try:
-                    updated = field.route(
-                        self.current, self.goal, self.points, self.forbidden
-                    )
-                except ValueError as error:
-                    self.abort(str(error))
-                    return
-                if updated != self.route:
-                    self.plan()
-                    return
-                self.state = "DRIVE"
-                self.leg_started = self.waypoint_started = self.now()
-                self.log("movement_start", markers=self.route)
-
-        def blocked_motion(self, v, w):
-            margin = self.robot["safety_margin"]
-            # Тормозной путь + время реакции; размеры считаются от центра корпуса.
-            braking = v*v/(2*self.cfg["linear_accel"])+abs(v)*0.25
-            front = self.robot["half_length"]+margin+braking
-            width = self.robot["half_width"]+margin
-            if abs(v) > 0.001:
-                direction = 1 if v > 0 else -1
-                return any(0 < direction*x < front and abs(y) < width for x, y, _ in self.body_points)
-            if abs(w) > 0.001:
-                return any(math.hypot(x, y) < self.robot["clearance"] for x, y, _ in self.body_points)
-            return False
-
-        def send(self, v, w, dt):
-            if self.blocked_motion(v, w):
-                self.stop()
-                return False
-            self.v += clamp(v-self.v, -self.cfg["linear_accel"]*dt, self.cfg["linear_accel"]*dt)
-            self.w += clamp(w-self.w, -self.cfg["angular_accel"]*dt, self.cfg["angular_accel"]*dt)
-            # Поворот на месте и аварийная остановка не должны оставлять линейный хвост.
-            if v == 0:
-                self.v = 0.0
-            if self.blocked_motion(self.v, self.w):
-                self.stop()
-                return False
-            msg = Twist()
-            msg.linear.x, msg.angular.z = float(self.v), float(self.w)
-            self.pub.publish(msg)
-            return True
-
-        def drive(self, dt):
-            if self.now()-self.waypoint_started > self.cfg["waypoint_timeout"]:
-                self.abort("Таймаут точки: проверить камеру, препятствие и положение робота")
-                return
-            if self.state == "ALIGN":
-                desired = args.target_yaw if self.leg == "outbound" else self.start_yaw
-                error = wrap(desired-self.pose[2])
-                if abs(error) <= self.cfg["yaw_tolerance"]:
-                    self.arrived()
-                else:
-                    self.send(0, clamp(1.4*error, -self.cfg["max_angular"], self.cfg["max_angular"]), dt)
-                return
-            if self.index >= len(self.route) and self.state != "BACKTRACK":
-                if self.leg == "return" or args.target_yaw is not None:
-                    self.state = "ALIGN"
-                else:
-                    self.arrived()
-                return
-            marker = self.current if self.state == "BACKTRACK" else self.route[self.index]
-            target_pose = field.poses[marker]
-            dx, dy = target_pose[0]-self.pose[0], target_pose[1]-self.pose[1]
-            d = math.hypot(dx, dy)
-            fresh = self.marker == marker and 0 <= self.now()-self.marker_stamp < self.cfg["marker_timeout"]
-            if d < self.cfg["position_tolerance"] and fresh and self.marker_distance < 0.04:
-                self.stop()
-                if self.state == "BACKTRACK":
-                    self.log("BACKTRACK_DONE", marker=marker)
-                    try:
-                        self.route = field.route(
-                            self.current, self.goal, self.points, self.forbidden
-                        )
-                    except ValueError as error:
-                        self.abort(str(error))
-                        return
-                    self.index, self.state = 1, "DRIVE"
-                    self.log("ROUTE_REPLANNED", markers=self.route)
-                else:
-                    self.current = marker
-                    self.index += 1
-                    self.log("WAYPOINT", marker=marker, pose=list(self.pose), marker_error=self.marker_distance)
-                self.waypoint_started = self.now()
-                return
-            if d < self.cfg["position_tolerance"] and not fresh:
-                self.stop()  # Без свежей метки достижение НЕ засчитываем.
-                return
-            error = wrap(math.atan2(dy, dx)-self.pose[2])
-            # Если следующая метка сзади, едем к ней задним ходом. Это не даёт
-            # роботу разворачиваться корпусом вплотную к стеллажам у marker 33.
-            reverse = self.state == "BACKTRACK" or abs(error) > math.pi/2
-            if reverse:
-                error = wrap(error-math.pi)
-            v = min(self.cfg["max_linear"], 0.8*d)
-            if reverse:
-                v = -min(v, 0.12)
-            if abs(error) > self.cfg["move_yaw_tolerance"]:
-                v = 0
-            w = clamp(1.5*error, -self.cfg["max_angular"], self.cfg["max_angular"])
-            if not self.send(v, w, dt) and self.state == "DRIVE":
-                edge = (self.current, marker)
-                self.forbidden.add(edge)
-                self.log("OBSTACLE", edge=edge, pose=list(self.pose))
-                # Вернуться по уже пройденному ребру, затем ехать по новому графу.
-                self.state = "BACKTRACK"
-                self.waypoint_started = self.now()
-                self.log("BACKTRACK", marker=self.current)
-
-        def arrived(self):
-            self.stop()
-            elapsed = self.now()-self.leg_started
-            self.total_time += elapsed
-            self.log("movement_stop", marker=self.goal, seconds=round(elapsed, 3))
-            if self.leg == "outbound":
-                self.state = "WAIT_RETURN"
-                self.return_wait = self.now()
-                self.log("TARGET_REACHED", marker=self.goal,
-                         message="Выставьте препятствие. return/Enter строит обратный маршрут.")
-            else:
-                self.state, self.terminal = "FINISHED", True
-                self.log("MISSION_FINISHED", marker=self.start, movement_seconds=round(self.total_time, 3))
-
-        def tick(self):
-            wall, now = time.monotonic(), self.now()
-            dt = clamp(now-self.last_sim, 0, 0.15)
-            if now < self.last_sim-0.01:
-                self.abort("Часы симуляции сброшены; запустите новую попытку")
-                return
-            if now != self.last_clock:
-                self.clock_wall, self.last_clock = wall, now
-            self.last_sim = now
+        def update(self):
+            rclpy.spin_once(self, timeout_sec=0.05)
             self.localize()
             if self.map_from_odom is not None and self.odom is not None:
                 self.pose = compose(self.map_from_odom, self.odom)
-            reasons = []
-            if self.pose is None:
-                reasons.append("нет локализации")
-            if self.scan is None:
-                reasons.append("нет scan")
-            if wall-self.odom_wall >= SENSOR_TIMEOUT:
-                reasons.append(f"odometry старше {wall-self.odom_wall:.2f}с")
-            if wall-self.scan_wall >= SENSOR_TIMEOUT:
-                reasons.append(f"scan старше {wall-self.scan_wall:.2f}с")
-            if wall-self.clock_wall >= SENSOR_TIMEOUT:
-                reasons.append(f"clock старше {wall-self.clock_wall:.2f}с")
-            healthy = not reasons
-            if healthy and not self.scan_points():
-                # Один краткий промах TF не должен ставить миссию на вечную паузу.
-                if wall-self.lidar_tf_wall >= SENSOR_TIMEOUT:
-                    reasons.append("TF лидара: "+self.lidar_tf_error)
-                    healthy = False
-            if not healthy:
+
+        def stop(self):
+            self.cmd.publish(Twist())
+
+        def send(self, linear, angular):
+            command = Twist()
+            command.linear.x = float(linear)
+            command.angular.z = float(angular)
+            self.cmd.publish(command)
+
+        def wait_start(self):
+            print("Жду ArUco под ровером. Старт определится автоматически.")
+            while rclpy.ok():
+                self.update()
                 self.stop()
-                if self.state != "WAIT_SENSORS" and not self.paused:
-                    self.paused = True
-                    self.log("SENSOR_STOP", reason="; ".join(reasons),
-                             message="После восстановления введите resume")
-            while not self.commands.empty():
-                command = self.commands.get_nowait()
-                if healthy or command.strip() in ("stop", "quit", "q", "s"):
-                    self.command(command)
-            if not healthy or self.paused or self.terminal:
-                self.stop()
-                return
-            if wall-self.last_status > 1:
-                msg = String()
-                msg.data = json.dumps(dict(state=self.state, leg=self.leg, pose=self.pose,
-                                           current=self.current, route=self.route))
-                self.status_pub.publish(msg)
-                self.last_status = wall
-            if self.state == "WAIT_SENSORS":
-                if self.marker_distance > 0.04:
-                    return
-                self.start = self.current = self.marker
-                self.start_yaw = self.pose[2]
-                self.log("LOCALIZED", marker=self.start, pose=list(self.pose))
-                self.plan()
-            elif self.state == "WAIT_GO":
-                self.stop()
-                if args.auto:
-                    self.command("go")
-            elif self.state == "WAIT_RETURN":
-                self.stop()
-                if args.auto and now-self.return_wait >= args.return_delay:
-                    self.command("return")
-            else:
-                if self.total_time+now-self.leg_started > self.cfg["mission_timeout"]:
-                    self.abort("Превышено время миссии")
-                else:
-                    self.drive(dt)
+                if self.pose is not None and self.marker_error <= args.tolerance:
+                    self.current = self.marker
+                    self.log("START_FOUND", marker=self.current)
+                    return self.current
+
+        def reached(self, marker):
+            return (
+                self.marker == marker
+                and time.monotonic() - self.marker_seen < 0.8
+                and self.marker_error <= args.tolerance
+            )
+
+        def drive_to(self, marker, check_obstacle=True):
+            target = marker_pose(marker, args.columns, args.spacing)
+            while rclpy.ok():
+                self.update()
+                if self.pose is None:
+                    self.stop()
+                    continue
+                if self.reached(marker):
+                    self.stop()
+                    return True
+
+                dx = target[0] - self.pose[0]
+                dy = target[1] - self.pose[1]
+                distance = math.hypot(dx, dy)
+                error = wrap(math.atan2(dy, dx) - self.pose[2])
+                linear = 0.0 if abs(error) > 0.16 else min(args.speed, max(0.04, 0.7 * distance))
+                angular = clamp(1.4 * error, -args.angular, args.angular)
+
+                if check_obstacle and linear > 0 and self.front < args.stop_distance:
+                    self.stop()
+                    return False
+                self.send(linear, angular)
+
+        def follow(self, goal, forbidden):
+            route = shortest_path(
+                self.current, goal, args.rows, args.columns, blocked, forbidden
+            )
+            index = 1
+            while index < len(route):
+                next_marker = route[index]
+                if self.drive_to(next_marker):
+                    self.current = next_marker
+                    self.log("WAYPOINT", marker=self.current)
+                    index += 1
+                    continue
+
+                edge = frozenset((self.current, next_marker))
+                forbidden.add(edge)
+                self.log(
+                    "OBSTACLE",
+                    edge=sorted(edge),
+                    distance=round(self.front, 3),
+                )
+                print(f"Препятствие перед {next_marker}. Возвращаюсь к {self.current}.")
+                self.drive_to(self.current, check_obstacle=False)
+                route = shortest_path(
+                    self.current, goal, args.rows, args.columns, blocked, forbidden
+                )
+                index = 1
+                show_route(self, "НОВЫЙ МАРШРУТ", route, "ROUTE_REPLANNED")
+            return route
+
+    def show_route(rover, title, route, event):
+        print(f"{title}: {' -> '.join(map(str, route))}")
+        rover.log(event, markers=route)
 
     rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
-    node = Mission()
-    quitting = threading.Event()
-    signal.signal(signal.SIGINT, lambda *_: quitting.set())
-    signal.signal(signal.SIGTERM, lambda *_: quitting.set())
-
-    def read_commands():
-        for line in sys.stdin:
-            node.commands.put(line)
-
-    threading.Thread(target=read_commands, daemon=True).start()
+    rover = Rover()
+    exit_code = 0
     try:
-        while rclpy.ok() and not quitting.is_set() and not node.terminal:
-            rclpy.spin_once(node, timeout_sec=0.05)
-        if quitting.is_set() and not node.terminal:
-            node.abort("SIGINT/SIGTERM")
-    except Exception as error:
-        node.abort(f"{type(error).__name__}: {error}")
-        raise
+        start = rover.wait_start()
+        route_there = shortest_path(start, args.target, args.rows, args.columns, blocked)
+        route_back = shortest_path(args.target, start, args.rows, args.columns, blocked)
+
+        print()
+        show_route(rover, "МАРШРУТ К ЦЕЛИ", route_there, "ROUTE_TO_TARGET")
+        show_route(rover, "МАРШРУТ НА СТАРТ", route_back, "ROUTE_TO_START")
+        input("\nEnter — начать движение: ")
+
+        started = time.monotonic()
+        rover.log("MOVEMENT_START", markers=route_there)
+        rover.follow(args.target, set())
+        first_time = time.monotonic() - started
+        rover.log("MOVEMENT_FINISHED", marker=args.target, seconds=round(first_time, 2))
+        rover.log("TARGET_REACHED", marker=args.target, seconds=round(first_time, 2))
+
+        input("\nЦель достигнута. Поставьте препятствие и нажмите Enter: ")
+        rover.leg = "return"
+        show_route(rover, "МАРШРУТ НА СТАРТ", route_back, "ROUTE_TO_START")
+        input("Enter — начать возврат: ")
+
+        started = time.monotonic()
+        rover.log("MOVEMENT_START", markers=route_back)
+        rover.follow(start, set())
+        second_time = time.monotonic() - started
+        rover.stop()
+        rover.log("MOVEMENT_FINISHED", marker=start, seconds=round(second_time, 2))
+        rover.log("START_REACHED", marker=start, seconds=round(second_time, 2))
+        rover.log(
+            "MISSION_FINISHED",
+            marker=start,
+            movement_seconds=round(first_time + second_time, 2),
+            log=str(rover.log_path),
+        )
+    except (KeyboardInterrupt, RuntimeError) as error:
+        exit_code = 1
+        rover.log("FAILED", reason=str(error) or "Ctrl+C")
     finally:
-        # Перед закрытием соединения несколько раз отправить настоящий нулевой Twist.
         for _ in range(5):
-            node.stop()
-            time.sleep(0.04)
-        node.log_file.close()
-        node.destroy_node()
+            rover.stop()
+            rclpy.spin_once(rover, timeout_sec=0.02)
+        rover.log_file.close()
+        rover.destroy_node()
         rclpy.shutdown()
-    if node.failed:
-        raise SystemExit(1)
+    raise SystemExit(exit_code)
 
 
 if __name__ == "__main__":
