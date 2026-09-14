@@ -98,8 +98,8 @@ def shortest_path(start, goal, rows, columns, blocked, forbidden=()):
 def arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", type=int, required=True)
-    parser.add_argument("--rows", type=int, default=ROWS)
-    parser.add_argument("--columns", type=int, default=COLUMNS)
+    parser.add_argument("--rows", type=int)
+    parser.add_argument("--columns", type=int)
     parser.add_argument("--spacing", type=float, default=SPACING)
     parser.add_argument("--blocked", type=int, nargs="*", default=[])
     parser.add_argument("--speed", type=float, default=MAX_SPEED)
@@ -107,10 +107,15 @@ def arguments():
     parser.add_argument("--stop-distance", type=float, default=STOP_DISTANCE)
     parser.add_argument("--tolerance", type=float, default=TOLERANCE)
     parser.add_argument("--scan-topic", default="/RMC2/scan_front")
-    parser.add_argument("--sim", action="store_true")
+    parser.add_argument("--sim", action="store_true", help="Симулятор с сеткой 6x6")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--start", type=int, default=0)
     args = parser.parse_args()
+
+    if args.rows is None:
+        args.rows = 6 if args.sim else ROWS
+    if args.columns is None:
+        args.columns = 6 if args.sim else COLUMNS
 
     count = args.rows * args.columns
     if args.rows < 1 or args.columns < 1:

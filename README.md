@@ -92,8 +92,9 @@ python3 module2/module_b.py --target 14 --sim
 python3 module2/module_b.py --target 14
 ```
 
-По умолчанию используется поле 5×5, ID 0–24 и шаг 1 м. Закрытые ячейки
-передаются через `--blocked`:
+Без `--sim` используется площадочное поле 5×5, ID 0–24. Флаг `--sim`
+включает старый Webots 6×6, ID 0–35. Закрытые ячейки передаются через
+`--blocked`:
 
 ```bash
 python3 module2/module_b.py --target 14 --blocked 7 8 13 --sim
@@ -103,6 +104,7 @@ python3 module2/module_b.py --target 14 --blocked 7 8 13 --sim
 
 - `--target` — целевой ArUco ID;
 - `--blocked` — закрытые ячейки;
+- `--sim` — профиль симулятора 6×6;
 - `--rows`, `--columns`, `--spacing` — геометрия сетки;
 - `--speed` — линейная скорость, по умолчанию 0.35 м/с, предел RMC2 0.5 м/с;
 - `--angular` — скорость поворота, по умолчанию 0.6 рад/с;
@@ -128,6 +130,7 @@ workspace RMC2 управляется через `/RMC2/cmd_vel`; Nav2 наст�
 
 ```bash
 python3 module2/module_b.py --target 14 --start 0 --dry-run
+python3 module2/module_b.py --target 8 --start 0 --sim --dry-run
 python3 module2/module_b.py --target 24 --start 6 --blocked 7 8 --dry-run
 ```
 
