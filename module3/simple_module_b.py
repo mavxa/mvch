@@ -1,60 +1,76 @@
 #!/usr/bin/env python3
-import argparse
-from datetime import datetime
+import time
 from pathlib import Path
 
 import cv2
+import rclpy
+from control_msgs.action import GripperCommand
+from cv_bridge import CvBridge
+from rclpy.action import ActionClient
+from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import Image
 from ultralytics import YOLO
 
 
 HERE = Path(__file__).resolve().parent
+CAMERA = "/RMC1/arm95/camera_gripper/image_color"
+GRIPPER = "/RMC1/arm95/gripper_controller/gripper_cmd"
+
+
+class Demo(Node):
+    def __init__(self):
+        super().__init__("simple_module_b")
+        self.model = YOLO(str(HERE / "models/latest.pt"))
+        self.bridge = CvBridge()
+        self.gripper = ActionClient(self, GripperCommand, GRIPPER)
+        self.gripper.wait_for_server()
+        self.create_subscription(Image, CAMERA, self.on_image, qos_profile_sensor_data)
+        self.started = None
+        self.opened = False
+        self.closed = False
+
+    def move_gripper(self, position):
+        goal = GripperCommand.Goal()
+        goal.command.position = position
+        goal.command.max_effort = 20.0
+        self.gripper.send_goal_async(goal)
+
+    def on_image(self, message):
+        frame = self.bridge.imgmsg_to_cv2(message, "bgr8")
+        result = self.model(frame, conf=0.25, verbose=False)[0]
+
+        if self.started is None:
+            self.started = time.monotonic()
+        elapsed = time.monotonic() - self.started
+
+        if elapsed >= 5 and not self.opened:
+            self.move_gripper(0.04)
+            self.opened = True
+            print("Захват открыт")
+        elif elapsed >= 7 and not self.closed:
+            self.move_gripper(0.0)
+            self.closed = True
+            print("Захват закрыт")
+
+        cv2.imshow("YOLO", result.plot())
+        if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
+            rclpy.shutdown()
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("source", help="Фото, видео, папка с фото или 0 для веб-камеры")
-    parser.add_argument("--weights", default=str(HERE / "models/latest.pt"))
-    parser.add_argument("--conf", type=float, default=0.25)
-    args = parser.parse_args()
-
-    source = int(args.source) if args.source.isdigit() else args.source
-    model = YOLO(args.weights)
-    log_path = HERE / "logs/simple_module_b.log"
-    log_path.parent.mkdir(exist_ok=True)
-
-    still_images = False
-    if isinstance(source, str):
-        path = Path(source)
-        still_images = path.is_dir() or path.suffix.lower() in {
-            ".jpg",
-            ".jpeg",
-            ".png",
-            ".bmp",
-            ".webp",
-        }
-
-    with log_path.open("a", encoding="utf-8") as log:
-        results = model.predict(source=source, conf=args.conf, stream=True, verbose=False)
-        for result in results:
-            now = datetime.now().isoformat(timespec="seconds")
-            detections = []
-            if result.boxes is not None:
-                for box in result.boxes:
-                    name = result.names[int(box.cls.item())]
-                    confidence = float(box.conf.item())
-                    detections.append(f"{name} {confidence:.2f}")
-
-            line = f"{now} | {', '.join(detections) if detections else 'ничего не найдено'}"
-            print(line)
-            log.write(line + "\n")
-            log.flush()
-
-            cv2.imshow("YOLO: q или Esc для выхода", result.plot())
-            key = cv2.waitKey(0 if still_images else 1) & 0xFF
-            if key in (ord("q"), 27):
-                break
-
-    cv2.destroyAllWindows()
+    input("Предмет (Кисть, Нож или Резаки): ")
+    rclpy.init()
+    node = Demo()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        cv2.destroyAllWindows()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":
