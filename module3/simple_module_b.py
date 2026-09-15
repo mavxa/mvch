@@ -4,18 +4,18 @@ from pathlib import Path
 
 import cv2
 import rclpy
-from control_msgs.action import GripperCommand
+from builtin_interfaces.msg import Duration
 from cv_bridge import CvBridge
-from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from ultralytics import YOLO
 
 
 HERE = Path(__file__).resolve().parent
 CAMERA = "/RMC1/arm95/camera_gripper/image_color"
-GRIPPER = "/RMC1/arm95/gripper_controller/gripper_cmd"
+GRIPPER = "/RMC1/arm95/gripper_trajectory_controller/joint_trajectory"
 
 
 class Demo(Node):
@@ -23,18 +23,20 @@ class Demo(Node):
         super().__init__("simple_module_b")
         self.model = YOLO(str(HERE / "models/latest.pt"))
         self.bridge = CvBridge()
-        self.gripper = ActionClient(self, GripperCommand, GRIPPER)
-        self.gripper.wait_for_server()
+        self.gripper = self.create_publisher(JointTrajectory, GRIPPER, 10)
         self.create_subscription(Image, CAMERA, self.on_image, qos_profile_sensor_data)
         self.started = None
         self.opened = False
         self.closed = False
 
     def move_gripper(self, position):
-        goal = GripperCommand.Goal()
-        goal.command.position = position
-        goal.command.max_effort = 20.0
-        self.gripper.send_goal_async(goal)
+        message = JointTrajectory()
+        message.joint_names = ["left_joint", "right_joint"]
+        point = JointTrajectoryPoint()
+        point.positions = [position, position]
+        point.time_from_start = Duration(sec=1)
+        message.points = [point]
+        self.gripper.publish(message)
 
     def on_image(self, message):
         frame = self.bridge.imgmsg_to_cv2(message, "bgr8")
@@ -49,7 +51,7 @@ class Demo(Node):
             self.opened = True
             print("Захват открыт")
         elif elapsed >= 7 and not self.closed:
-            self.move_gripper(0.0)
+            self.move_gripper(0.0213)
             self.closed = True
             print("Захват закрыт")
 
