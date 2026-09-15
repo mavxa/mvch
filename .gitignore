@@ -7,3 +7,4 @@ reports/
 !module3/models/latest.pt
 module3/runs/
 module3/predictions/
+module3/training_new/

@@ -1,5 +1,9 @@
 # Модуль В: датасет и YOLO
 
+Максимально простой сценарий на один день находится в [SIMPLE.md](SIMPLE.md).
+Он не заменяет полный `module3.py`: там отдельно собраны нарезка видео,
+локальная разметка, обучение через CLI, OpenCV-демо и проверка захвата.
+
 Камера Webots: `/RMC1/arm95/camera_gripper/image_color`. На физическом RMC1 новая
 документация указывает `/RMC1/arm95/svcam/right/image/compressed` с типом
 `sensor_msgs/msg/Image` — несмотря на суффикс `compressed`.
